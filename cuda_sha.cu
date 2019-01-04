@@ -269,14 +269,14 @@ extern "C" __global__ void benchKernel(BYTE * block_d){
 	    sha256_init(&thread_ctx);
 	  	sha256_update(&thread_ctx, hash_t_i, 32);
 	  	sha256_final(&thread_ctx, hash_t_f);
-
+/*
 			if(idx == 0){
 				printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x \n", hash_t_f[0], hash_t_f[1], hash_t_f[2], hash_t_f[3], hash_t_f[4], hash_t_f[5], hash_t_f[6], hash_t_f[7], hash_t_f[8], hash_t_f[9],\
 				hash_t_f[10], hash_t_f[11], hash_t_f[12], hash_t_f[13], hash_t_f[14], hash_t_f[15], hash_t_f[16], hash_t_f[17], hash_t_f[18], hash_t_f[19],\
 				hash_t_f[20], hash_t_f[21], hash_t_f[22], hash_t_f[23], hash_t_f[24], hash_t_f[25], hash_t_f[26], hash_t_f[27], hash_t_f[28], hash_t_f[29], hash_t_f[30], hash_t_f[31]);
 
 			}
-
+*/
 			nonce += inc_size;
 	  }
 }

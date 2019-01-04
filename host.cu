@@ -3,59 +3,131 @@
 // Due: December 6, 2018
 // Programmer: Connor Culloden
 
-// Compile with nvcc -rdc=true sha256.cu cuda_sha.cu host.cu -o cuda_sha
-// rdc enables device linking
+/* PROJECT DESCRIPTION
+ *********************************************************************************
+ * The following program was developed to test the performance potential of
+ * blockchain based applications which utilize several child blockchains which are
+ * unified under a single parent blockchain, forming a tree-like structure.
+ * Such a framework could potentially enable much higher transaction verification
+ * rates across the framework, as much of the work would be performed on child chains
+ * which use a traditional Proof of Work consensus protocol to maintain security.
+ * This can enable the parent chain to oversee the contributing child chains
+ * using a less intensive protocol such as Proof of Stake, while mitigating the
+ * possibility for the 'nothing at stake' problem to arise. Further enhancements
+ * may allow the framework to operate with far lower memory requirements as users
+ * and miners for each child chain would only need the subset of transaction data
+ * to verify a transactions authenticity. The parent-child architecture also allows
+ * for pruning of spent chains to reduce the total framework memory overhead.
+ *
+ * This particular project will primarily focus on the mining comparison across
+ * various architecture cores, and many of the critical features for a fully
+ * functional blockchain application are not present, and are planned to be
+ * implemented in the future if promising results are obtained.
+ *
+ * The algorithm utilized here follows a very similar framework to Bitcoin,
+ * sharing the same basis for Block Headers and double SHA256 hashing. The input
+ * 'transaction' data consists of a set of randomly generated hash values which
+ * are created as needed, and are representative of the merkle roots for blocks
+ * of transactions. Due to this, the program relies soley on variations in the
+ * nonce and time fields when searching for a solution to each block.
+ *
+ * Parent chain architectures include a Merkle Tree hashing algorithm to collect
+ * child transactions into a merkle root, though these parent blocks are of a user
+ * specified fixed size to keep things simple.
+ *
+ * This implementation was designed to run multiple mining algorithms on a
+ * single CUDA enabled GPU (compute compatibility 6.1) to best fit the testing
+ * environment, though this could be extended to multiple GPUs of a different
+ * generation with a bit of modification. Running this application across many
+ * GPU clusters may require a bit more effort, as an intermediate framework would
+ * most likely be neccessary to enable intercluster communication.
+ *
+ *********************************************************************************
+ * PROGRAM PARAMETERS
+ *********************************************************************************
+ * Many of the program parameters are modifiable using various command line
+ * arguments, which enable the testing and comparison of various architectures,
+ * and allow for other uses such as code profiling and benchmarking. Mining options
+ * are also available to scale this application to meet hardware constraints,
+ * such as initial difficulty targets and exit conditions, which can
+ * drastically reduce the work required to test an architecture.
+ *
+ * The difficulty scaling utilized here has also been modified a fair amount
+ * compared to traditional blockchain architectures, as it is designed to sweep
+ * over a range of difficulty targets, instead of changing to maintain a consistent
+ * mining rate across a network. The difficulty is incremented bytewise, creating
+ * 255 (0xFF) difficulty levels for each target exponent. This combined with
+ * the ability to lower the diffiulty adjustment period allows a large range of
+ * diffiulties to be tested in a matter of hours instead of weeks.
+ *
+ *********************************************************************************
+ * PROGRAM USAGE
+ *********************************************************************************
+ * This program can be compiled by running the included bash script 'compile.sh'
+ * This operation can also be performed on non-linux based systems using the
+ * following command: FIXME: THIS IS PROBABLY GOING TO CHANGE IN THE FUTURE
+ *                   nvcc -rdc=true sha256.cu cuda_sha.cu host.cu -o cuda_sha
+ *
+ * Once compiled, the program can be run by executing the created executable,
+ * followed by a list of run options which determine the architecture and many
+ * other optional features.
+ * To find out more, try using the '--help' option to see an updated list of
+ * accepted parameters.
+ *
+ * The main mining operation produces numerous output files in a unique directory (FIXME)
+ * located in either the default 'outputs' folder, or a user specified folder (FIXME)
+ * For each worker chain, the folder will contain an outputs_#.txt file,
+ * which displays the basic information for each block mined, along with some
+ * timing statistics for each difficulty level. An error file is also provided to
+ * isolate error messages created by events such as when the end of an input file
+ * is reached or when the parent chain buffer fills up before the previous block
+ * has finished, creating a lag in the system.
+ *
+ * Multilevel architectures also include a file to detail the hashes that went into
+ * each parent block and the total time taken to fill the parent buffer (pHashOutputs),
+ * and a file that consolidates the parent blocks, along with the timing statistics
+ * for each parent difficulty level.
+ */
+
+/* TECHNICAL REFERENCE
+ *********************************************************************************
+ * Each block header follows the same structure used for the Bitcoin blockchain
+ * The total block size is 80 Bytes, with the following breakdown
+ *_____________________________________________________________________________
+ *______NAME______|___SIZE___|___________________DESCRIPTION___________________|
+ * Version        | 4  Bytes | Software Version                                |
+ * hashPrevBlock  | 32 Bytes | Hash of the previous block in the chain         |
+ * hashMerkleRoot | 32 Bytes | Merkle Root of the current block                |
+ * Time           | 4  Bytes | Current Timestamp (sec) since last Epoch        |
+ * Bits           | 4  Bytes | Compact form of the target difficulty           |
+ * Nonce          | 4  Bytes | Variable value to try and find a solution       |
+ *------------------------------------------------------------------------------
+ *
+ * The algorithm implemented uses a constant software version, and a zero value
+ * initial previous block hash. The rest of the chain builds off of this.
+ * The mining algorithm also varies a bit from the standard bitcoin algorithm by
+ * updating the time after all nonces have been tried, and resetting the nonce
+ * to zero. This eliminates some of the additional complexity that would result
+ * from constantly modifying the time, or implementing the extraNonce value.
+ *
+ * More details on the block hashing algorithm can be found here:
+ * https://en.bitcoin.it/wiki/Block_hashing_algorithm
+ *
+ */
+
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/stat.h>
-#include <math.h>
-#include <string.h>
-#include <time.h>
-#include "cuda_sha.h"
+#include <sys/stat.h>     // NEEDED FOR DIRECTORY CREATION
+#include <math.h>         // NEEDED FOR MORE COMPLEX MATH
+#include <string.h>       // NEEDED FOR STRING OPERATIONS
+#include <ctype.h>        // NEEDED FOR char OPERATION tolower
+#include <time.h>         // NEEDED FOR TIMESTAMPING
 
+#include "cuda_sha.h"
 #include <cuda.h>
 
-// Update functions to update the time for each kernel when needed
-
-// Upon finding a kernel, send message to update the processor that requested the job
-//    Related worker receives the solved portion of the block -> nonce, time, blockhash
-//    The worker can then relay these details to the master and parent
-
-//    The worker must respond to the host with the merkleroot of the next block,
-//    The nonce can be reset for every new computation, and the found hash can be set as the prev block hash in memory while waiting for the worker responses
-
-// It may be more realistic to have the worker send the hashes to the master and parent before sending the next block, which would be more representative of the
-// Consensus mechanism
-
-// The host needs a function which can actively update the timestamp
-// A device function is needed to quickly iterate over the nonces for each block, loop unrolling may help warp scheduling
-// A target comparitor would be beneficial in quickly comparing the value on chip,
-//
-// A method is needed to quickly associate incoming messages with their stored memory values
-
-
-
-// States:
-// Constructor: create streams, allocate blocks, send genesis blocks
-// Wait_state: consistently query the stream and recv functions for updates, async may be the best approach depending on congestion, streaming memory allocation
-// On receive: start the kernel/stream associated with the processor which sent the new block_h
-// difficulty: may be best to receive this from the workers, or even better have them send a flag indicating that the next block will increase in difficulty,
-//    such that the difficulty can be modified at the same time that the previous block header is stored
-// Kernel Event: send the block data to the worker, and add an async receive call to the listening list
-
-
-// The host would only need 1 listener per operation, max listeners for recv or kernels would be equal to the number of total nodes (or set to 5 for convinience)
-
-// Create a file initialization program using timestamps, nonces, and threadIds to generate the random files for each worker
 typedef unsigned char BYTE;
-
-#define maxStreams 5
-
-#define DEBUG 1
-
-// ONLY ENABLE IF NOT SAVING CONSOLE OUTPUT TO A FILE, OTHERWISE THE STATUS WILL OVERTAKE THE WRITTEN OUTPUT
-#define MINING_STATUS 0
 
 #define NUM_THREADS 256
 #define MAX_BLOCKS 16
@@ -78,6 +150,19 @@ typedef unsigned char BYTE;
 
 // Exponentially reduce computation time, 0 is normal, positive values up to 3 drastically reduce difficulty
 #define DIFF_REDUCE 1
+
+// INITIALIZE DEFAULT GLOBAL VARIABLES FOR COMMAND LINE OPTIONS
+// INFORMATIVE COMMAND OPTIONS
+int DEBUG = 0;            // DEBUG DISABLED BY DEFAULT
+int PROFILER = 0;         // PROFILER SWITCH, DISABLED BY DEFAULT
+int MINING_PROGRESS = 0;  // MINING PROGRESS INDICATOR DISABLED BY DEFAULT (ONLY ENABLE IF NOT SAVING CONSOLE OUTPUT TO A FILE, OTHERWISE THE STATUS WILL OVERTAKE THE WRITTEN OUTPUT)
+
+// ARCHITECTURE COMMAND OPTIONS
+int MULTILEVEL = 0;       // MULTILEVEL ARCHITECTURE DISABLED BY DEFAULT
+int NUM_WORKERS = 1;      // NUMBER OF WORKERS 1 BY DEFAULT
+
+// MINING COMMAND OPTIONS
+// FIXME: ADD NUM_THREADS, MAX_BLOCKS, OPTIMIZE_BLOCKS, etc. here
 
 
 /***************************************************************************************************************************************************************************/
@@ -182,71 +267,152 @@ __host__ void printOutputFile(char * outFileName, BYTE * block_h, BYTE * hash_f,
 
 // HOST INITIALIZATION, BEGIN WITH PARSING COMMAND LINE ARGUMENTS
 int main(int argc, char *argv[]){
-  int multilevel, num_workers;
-  switch (argc) {
-    /*
-    case 1:
-        printf("STARTING DEFAULT OPERATION USING A SINGLE CHAIN.\n");
-        printf("Usage: ./chainminer [arguments]\n POSSIBLE ARGUMENTS:\n");
-        printf("\t -m \t Multilevel architecture\n");
-        printf("\t -c # \t Number of chains to implement (default: 1)\n");
-        printf("\t -b # \t Number of blocks to implement per chain (default: 1)\n");
-        printf("\t -t # \t Number of threads to implement per block (default: 32)\n");
-        printf("\t -i string \t Custom input file \n");
-    break; */
-    case 2:
-        // Number of chains to implement
-        if(atoi(argv[1]) == 1){
-          multilevel = 1;
-        }
-        else{
-          multilevel = 0;
-        }
-        num_workers = 1;
-    break;
-    case 3:
-        // Parallel design
-        if(atoi(argv[1]) == 1){
-          multilevel = 1;
-        }
-        else{
-          multilevel = 0;
-        }
-        // MAX_BLOCKS set to 10 by default. With 2 parent blocks,
-        if(atoi(argv[2]) > 0 ){
-          num_workers = atoi(argv[2]);
-        }
-        else{
-          num_workers = 0;
-        }
+  // IMPROVED COMMAND LINE ARGUMENT PARSING
+  if(argc == 1){ // DEFAULT MODE SELECTED, PRINT OUTPUT SPECIFYING OPTIONS WITH DEFAULTS
+    printf("WARNING: NO OPTIONS SELECTED, RUNNING DEFAULT IMPLEMENTATION\n\
+BASIC INPUT OPTIONS: \n\n\
+\t --help  \t HELP FLAG: DISPLAY ALL INPUT OPTIONS (NO DESIGN RUN)\n\
+\t --debug \t ENABLE MORE DETAILED CONSOLE OUTPUTS (DEFAULT: DISABLED)\n\
+\t --multi \t MULTILEVEL ARCHITECTURE (DEFAULT: DISABLED)\n\
+\t  -w #   \t NUMBER OF WORKER CHAINS (DEFAULT: 1)\n\n\
+FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
+  }
 
-    break;
-    default:
-      multilevel = 0;
-      num_workers = 1;
-    break;
+  // INITIALIZE PROGRAM FLAGS
+  int err_flag = 0;
+  int help_flag = 0;
+
+  // PERFORM DRY RUN (NO MINING)
+  int dry_run = 0;
+
+  // FLAGS FOR ADDITIONAL TESTING AND INFORMATION
+  int query_flag = 0;
+  int test_flag = 0;
+  int bench_flag = 0;
+
+  // TODO ADD OPTION FOR SELECTING THE OPTIMAL THREAD AND BLOCK COUNT BASED ON DEVICE QUERIES
+
+
+  char arg_in[50];
+  for(int i = 1; i < argc; i++){
+      // COPY INPUT ARG TO ALL LOWERCASE STRING
+      strcpy(arg_in, argv[i]);
+      char * p = arg_in;
+      for( ; *p; ++p) *p = tolower(*p);
+      printf("\nARGUMENT %i: %s\n", i, arg_in);
+      // CHECK FOR INFORMATION OPTIONS AND FUNCTION SWITCHES FIRST
+      if(strcmp(arg_in, "--help") == 0){  // HELP OPTION
+        help_flag = 1;
+        break;
+      }
+      else if(strcmp(arg_in, "--debug") == 0){  // DEBUG OPTION
+        DEBUG = 1;
+        printDebug("DEBUG SETTINGS ENABLED\n");
+      }
+      else if(strcmp(arg_in, "--dryrun") == 0){  // DRY RUN OPTION
+        dry_run = 1;
+        printf("DRY RUN ENABLED, MINING WILL NOT BE INITIATED\n");
+      }
+      else if(strcmp(arg_in, "--profile") == 0){  // PROFILER OPTION
+        PROFILER = 1;
+        printf("PROFILER FUNCTIONS ENABLED\n");
+      }
+      else if(strcmp(arg_in, "--indicator") == 0){  // MINING INDICATOR OPTION
+        MINING_PROGRESS = 1;
+        printf("WARNING: MINING PROGRESS INDICATOR ENABLED! THIS MAY CAUSE UNDESIRABLE BEHAVIOR IF WRITING CONSOLE OUTPUT TO A FILE!\n");
+      }
+      // CHECK FOR TESTING INTERFACE OPTIONS
+      else if(strcmp(arg_in, "--query") == 0){ // DEVICE QUERY OPTION
+        query_flag = 1;
+      }
+      else if(strcmp(arg_in, "--test") == 0){  // FUNCTIONAL VERIFICATION TEST OPTION
+        // FIXME: ADD FUNCTIONAL VERIFICATION TEST
+        test_flag = 1;
+      }
+      else if(strcmp(arg_in, "--benchmark") == 0){  // BENCHMARKING OPTION
+        bench_flag = 1;
+      }
+      // CHECK FOR DESIGN PARAMETERS
+      else if(strcmp(arg_in, "--multi") == 0){
+        printf("MULTITHREADED DESIGN ENABLED!\n");
+        MULTILEVEL = 1;
+      }
+      else if(strcmp(arg_in, "-w") == 0){
+          if(i+1 < argc){
+            if(atoi(argv[i+1]) > 0){
+              NUM_WORKERS = atoi(argv[i+1]);
+              printf("NUMBER OF WORKERS SET TO %i\n", NUM_WORKERS);
+              i++;
+            } else{
+              printf("%s   fatal:  OPTION '-w' EXPECTS A POSITIVE INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+              err_flag = 1;
+              break;
+            }
+          } else{
+            printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-w'\n\n", argv[0]);
+            err_flag = 1;
+            break;
+          }
+      }
+      //FIXME: ADD ADDITIONAL OPTIONS HERE FOR OTHER DESIGN PARAMETERS
+
+  }
+
+  // TODO ADD VARIABLE VERIFICATION HERE, RAISE ERROR FLAG IF A PROBLEM IS ENCOUNTERED
+  // TODO SET BLOCKS PER WORKER BASED ON NUMBER OF WORKERS SELECTED AND BLOCKS AVAILABLE
+        // NOTE TECHNICALLY, MAX BLOCKS IS 2^32, THOUGH THESE OBVIOUSLY WOULDNT BE CONCURRENT
+
+  // TODO ADD OPTION TO GET IDEAL UTILIZATION BASED ON USAGE STATISTICS
+
+
+
+  // ERROR IN COMMAND LINE OPTIONS
+  if(err_flag == 1){
+    printf("ONE OR MORE ERRORS DETECTED IN COMMAND LINE OPTIONS, UNABLE TO CONTINUE OPERATION\nTRY '%s --help' TO SEE A LIST OF AVAILABLE OPTIONS\n", argv[0]);
+  }
+  // HELP OPTIONS
+  else if(help_flag == 1){
+    printf("\nAVAILABLE OPTIONS FOR '%s' (LETTER-CASE DOES NOT MATTER):\n\n\
+ PROGRAM QUERY AND TESTING INTERFACES (INFORMATION OPTIONS)\n\n\
+\t --help  \t\t HELP FLAG: DISPLAY ALL INPUT OPTIONS (NO DESIGN RUN)\n\
+\t --query \t\t DEVICE QUERY FLAG: RUN QUERY TO SHOW BASIC DEVICE HARDWARE SPECIFICATIONS \n\
+\t --test  \t\t TEST FLAG: RUN TEST CORE TO VERIFY KERNEL OUTPUTS ARE CORRECT\n\
+\t --benchmark  \t\t BENCHMARK FLAG: RUN SIMPLE MINING CORE TO DETERMINE DESIGN PERFORMANCE\n\n\
+ PROGRAM FUNCTION SWITCHES (ENABLE OR DISABLE CERTAIN FEATURES)\n\n\
+\t --debug \t\t ENABLE MORE DETAILED CONSOLE OUTPUTS (DEFAULT: DISABLED)\n\
+\t --dryrun \t\t DISABLES THE MAIN MINING FUNCTION FOR THIS RUN (DEFAULT: DISABLED)\n\
+\t --profile \t\t ENABLE CAPTURE FUNCTIONS FOR USE WITH NVIDIA VISUAL PROFILER (DEFAULT: DISABLED)\n\
+\t --indicator \t\t ENABLE PROGRESS INDICATOR (DEFAULT: DISABLED)\n\t\t\t\t\t [!!WARNING!!-DO NOT USE INDICATOR IF WRITING CONSOLE OUTPUT TO A FILE]\n\n\
+ DESIGN SPECIFIERS\n\n\
+\t --multi \t\t MULTILEVEL ARCHITECTURE (DEFAULT: DISABLED)\n\
+\t  -w #   \t\t NUMBER OF WORKER CHAINS AS A POSITIVE INTEGER (DEFAULT: 1)\n", argv[0]);
+  }
+  // RUN THE SELECTED IMPLEMENTATION(S)
+  else{
+    // RUN DEVICE QUERY TO SEE AVAILABLE RESOURCES
+    if(query_flag == 1){
+      hostDeviceQuery();
     }
-
-    // The compiler didn't like including the parent conditionally,
-    // so a duplicate function had to be created with the parent included
-
-    hostDeviceQuery();
-    printf("\n\n**********************************************\nBEGIN MINING PROCESS**************************\n**********************************************\n\n");
-
-
-//    benchmarkKernel(num_workers);
-    hostCoreProcess(num_workers, multilevel);
-    /*
-    if(multilevel == 1){
-
-    }else{
-      hostCoreProcess(num_workers);
+    // RUN FUNCTIONAL TEST FOR THE HASHING FUNCTIONS
+    if(test_flag == 1){
+      printf("FUNCTIONAL TESTING SELECTED!!!!! (TODO: ADD FUNC TEST FOR SINGLE/DOUBLE SHA256 & MERKLE ROOT)\n\n");
+    //  hostTestProcess();
     }
-*/
-//    hostTestProcess(num_workers);
+    // RUN BENCHMARK TEST FOR DEVICE PERFORMANCE
+    if(bench_flag == 1){
+      printf("BENCHMARK TESTING SELECTED!!!!!\n");
+      benchmarkKernel(NUM_WORKERS);
+    }
+    // START MINING IF DRY RUN IS NOT SELECTED
+    if(dry_run == 0){
+      // TODO CHECK FOR PROFILER ENABLED, INCLUDE LOGGING OF ENABLED SETTINGS
+      hostCoreProcess(NUM_WORKERS, MULTILEVEL);
+    } else{
+      printLog("MINING DISABLED FOR DRY RUN TESTING. NOW EXITING...\n\n");
+    }
+  }
 
-
-    return 0;
+  return 0;
 }
 
 /****************************************************************************************************************************************************************************/
@@ -465,7 +631,7 @@ cudaEventRecord(g_time[0], g_timeStream);
     int block_total = 0;
     while(block_total < TARGET_BLOCKS || PROC_REMAINING != 0){
       updateTime(&tStream, time_h, time_d);
-      if(MINING_STATUS == 1){
+      if(MINING_PROGRESS == 1){
         mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
       }
       // SET FLAG_TARGET TO 1
@@ -506,7 +672,7 @@ cudaEventRecord(g_time[0], g_timeStream);
                 // WAIT FOR PARENT TO FINISH, THEN RETRIEVE RESULTS
                 while(cudaStreamQuery(pStream) != 0){
                   updateTime(&tStream, time_h, time_d);
-                  if(MINING_STATUS == 1){
+                  if(MINING_PROGRESS == 1){
                     mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
                   }
                   // MONITOR WORKER TIMING WHILE WAITING
@@ -667,7 +833,7 @@ cudaEventRecord(g_time[0], g_timeStream);
           if(PROC_REMAINING == 1){
             while(cudaStreamQuery(pStream) != 0){
               updateTime(&tStream, time_h, time_d);
-              if(MINING_STATUS == 1){
+              if(MINING_PROGRESS == 1){
                 mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
               }
             }
@@ -838,10 +1004,10 @@ __host__ void hostDeviceQuery(void){
   printf("  Device supports launching cooperative kernels via cudaLaunchCooperativeKernel: %i\n", value);
 
   cudaDeviceGetAttribute(&value, (cudaDeviceAttr)101   ,device);
-  printf("  Host can directly access managed memory on the device without migration.: %i\n", value);
+  printf("  Host can directly access managed memory on the device without migration: %i\n", value);
 
   cudaDeviceGetAttribute(&value, (cudaDeviceAttr)99 ,device);
-  printf("  Device supports host memory registration via cudaHostRegister.: %i\n", value);
+  printf("  Device supports host memory registration via cudaHostRegister: %i\n", value);
 
   return;
 }
