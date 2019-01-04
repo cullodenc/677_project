@@ -1,0 +1,4 @@
+*.py
+inputs/*
+outputs/*
+!**.gitkeep
