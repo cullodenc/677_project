@@ -137,7 +137,8 @@
      ├───HOST_FUNCTIONS
      │   ├───TESTING
      │   │   ├───hostDeviceQuery
-     │   │   ├───benchmarkTest
+     │   │   ├───hostFunctionalTest
+     │   │   ├───hostBenchmarkTest
      FIXME
      │   ├───MEMORY
      │   │   ├───ALLOCATION
@@ -215,8 +216,14 @@
      │           ├───printErrorTime
      │           └───printOutputFile
      │
-     ├───GLOBAL_FUNCTIONS FIXME
+     ├───GLOBAL_FUNCTIONS
+     │   ├───benchmarkKernel
+     │   ├───genTestHashes
+     │   ├───minerKernel
+     │   └───getMerkleRoot
+     │
      └───DEVICE_FUNCTIONS FIXME
+         ├───printHash
 
 */
 
@@ -244,14 +251,15 @@
 #include <ctype.h>        // NEEDED FOR char OPERATION tolower
 #include <time.h>         // NEEDED FOR TIMESTAMPING
 
-#include "cuda_sha.h"
+//#include "cuda_sha.h"
+#include "sha256.h"
 #include <cuda.h>
 
 /***************************************************************************************************************************************************************************/
 /*****************************************************************************TYPE DEFINITIONS******************************************************************************/
 /***************************************************************************************************************************************************************************/
-
-typedef unsigned char BYTE;
+// FIXME
+//typedef unsigned char BYTE;
 
 
 /***************************************************************************************************************************************************************************/
@@ -353,10 +361,11 @@ __host__ void hostCoreProcess(int num_chains, int multilevel);
 __host__ void hostDeviceQuery(void);
 
 /*-----------------------------------------------------------------------------TEST FUNCTIONS------------------------------------------------------------------------------*/
-__host__ void benchmarkTest(int num_workers);
+__host__ void hostFunctionalTest(void);
+__host__ void hostBenchmarkTest(int num_workers);
 
 // FIXME Move this with global functions
-__global__ void cudaTest(void);
+
 // TODO ADD TESTING CORES HERE
 /*-----------------------------------------------------------------------------------||------------------------------------------------------------------------------------*/
 
@@ -455,7 +464,14 @@ __host__ void printOutputFile(char * outFileName, BYTE * block_h, BYTE * hash_f,
 /**********************************                                                                                                      ***********************************/
 /***************************************************************************************************************************************************************************/
 
-// TODO ADD GLOBAL FUNCTIONS HERE
+/*---------------------------------------------------------------------------HASH TEST FUNCTIONS---------------------------------------------------------------------------*/
+__global__ void cudaTest(void);
+__global__ void benchmarkKernel(BYTE * block_d);
+
+/*-----------------------------------------------------------------------------MINING FUNCTIONS----------------------------------------------------------------------------*/
+__global__ void genTestHashes(BYTE * hash_df, BYTE * seed, int num_blocks);
+__global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE * target, BYTE * time_d, int * flag_d, int compare, int num_blocks);
+__global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks);
 
 
 /***************************************************************************************************************************************************************************/
@@ -469,6 +485,7 @@ __host__ void printOutputFile(char * outFileName, BYTE * block_h, BYTE * hash_f,
 /***************************************************************************************************************************************************************************/
 
 // TODO ADD DEVICE FUNCTION DECLARATIONS HERE
+__device__ void printHash(BYTE * hash);
 
 
 /***************************************************************************************************************************************************************************/
@@ -614,12 +631,12 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
     // RUN FUNCTIONAL TEST FOR THE HASHING FUNCTIONS
     if(test_flag == 1){
       printf("FUNCTIONAL TESTING SELECTED!!!!! (TODO: ADD FUNC TEST FOR SINGLE/DOUBLE SHA256 & MERKLE ROOT)\n\n");
-    //  hostTestProcess();
+      hostFunctionalTest();
     }
     // RUN BENCHMARK TEST FOR DEVICE PERFORMANCE
     if(bench_flag == 1){
       printf("BENCHMARK TESTING SELECTED!!!!!\n");
-      benchmarkTest(NUM_WORKERS);
+      hostBenchmarkTest(NUM_WORKERS);
     }
     // START MINING IF DRY RUN IS NOT SELECTED
     if(dry_run == 0){
@@ -1273,15 +1290,13 @@ __host__ void hostDeviceQuery(void){
 
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /*******************************************************************************TEST FUNCTIONS******************************************************************************/
-__global__ void cudaTest(void){
-	//SHA256_CTX ctx;
-//	printf("MERKLE ROOT COPY TEST PRINT: \n");
-		printf("THREAD %i WORKING\n", threadIdx.x);
+__host__ void hostFunctionalTest(void){
+  printf("STARTING FUNCTIONAL TEST\n");
 
-//	printf("MERKLE ROOT COPY TEST FINISHED\n");
+
 }
 
-__host__ void benchmarkTest(int num_workers){
+__host__ void hostBenchmarkTest(int num_workers){
   // INITIALIZE BENCHMARK VARIABLES
   BYTE * test_block_h;
   BYTE * test_block_d;
@@ -1305,7 +1320,7 @@ __host__ void benchmarkTest(int num_workers){
 
   cudaEventRecord(bench_s, bench_stream);
   cudaMemcpyAsync(test_block_d, test_block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, bench_stream);
-  benchKernel<<<MAX_BLOCKS/num_workers, NUM_THREADS, 0, bench_stream>>>(test_block_d);
+  benchmarkKernel<<<MAX_BLOCKS/num_workers, NUM_THREADS, 0, bench_stream>>>(test_block_d);
   //TODO ADD KERNEL CALL HERE
 
   cudaEventRecord(bench_f, bench_stream);
@@ -2174,7 +2189,234 @@ ________________________________________________________________________________
 /********************************************************************************************************************************************************************************************/
 /********************************************************************************************************************************************************************************************/
 /********************************************************************************************************************************************************************************************/
- // TODO ADD GLOBAL FUNCTIONS
+
+
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/****************************************************************************HASH TEST FUNCTIONS****************************************************************************/
+
+__global__ void cudaTest(void){
+	//SHA256_CTX ctx;
+//	printf("MERKLE ROOT COPY TEST PRINT: \n");
+		printf("THREAD %i WORKING\n", threadIdx.x);
+
+//	printf("MERKLE ROOT COPY TEST FINISHED\n");
+}
+
+
+__global__ void benchmarkKernel(BYTE * block_d){
+    SHA256_CTX thread_ctx;
+ 	  unsigned int nonce = 0x00000000;
+ 	  unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
+ 		int inc_size = blockDim.x * gridDim.x;
+ 	  nonce += idx;
+
+ 	  BYTE threadBlock[80];
+ 		#pragma unroll 80
+ 	  for(int i = 0; i < 80; i++){
+ 	    threadBlock[i] = block_d[i];
+ 	  }
+
+ 		BYTE hash_t_i[32];
+ 	  BYTE hash_t_f[32];
+ 		#pragma unroll 32
+ 	  for(int i = 0; i < 32; i++){
+ 	    hash_t_i[i] = 0x00;
+ 	    hash_t_f[i] = 0x00;
+ 	  }
+
+ 		while(nonce < 0x0FFFFFFF){
+ 	    threadBlock[76] = (BYTE)(nonce >> 24) & 0xFF;
+ 	    threadBlock[77] = (BYTE)(nonce >> 16) & 0xFF;
+ 	    threadBlock[78] = (BYTE)(nonce >> 8) & 0xFF;
+ 	    threadBlock[79] = (BYTE)(nonce & 0xFF);
+
+ 	    sha256_init(&thread_ctx);
+ 	    sha256_update(&thread_ctx, threadBlock, 64);
+ 	    sha256_update(&thread_ctx, &(threadBlock[64]), 16);
+ 			sha256_final(&thread_ctx, hash_t_i);
+
+ 	    sha256_init(&thread_ctx);
+ 	  	sha256_update(&thread_ctx, hash_t_i, 32);
+ 	  	sha256_final(&thread_ctx, hash_t_f);
+
+ 			nonce += inc_size;
+ 	  }
+ }
+
+ /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+ /***************************************************************************HASH MINING FUNCTIONS***************************************************************************/
+
+__global__ void genTestHashes(BYTE * hash_df, BYTE * seed, int num_blocks){
+  SHA256_CTX ctx;
+  BYTE block = (BYTE)(blockIdx.x & 0xFF);
+  BYTE thread = (BYTE)(threadIdx.x & 0xFF);
+  int offset = 32*threadIdx.x + blockIdx.x * blockDim.x;
+
+  BYTE seed_hash[32];
+  #pragma unroll 30
+  for(int i = 0; i < 30; i++){
+    seed_hash[i] = seed[i];
+  }
+
+  seed_hash[30] = block;
+  seed_hash[31] = thread;
+
+  sha256_init(&ctx);
+  sha256_update(&ctx, seed_hash, 32);
+  sha256_final(&ctx, &hash_df[offset]);
+}
+
+__global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE * target, BYTE * time_d, int * flag_d, int compare, int num_blocks){
+  int success = 0;
+
+  unsigned int nonce = 0x00000000;
+  int iteration = 0;
+  unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+  SHA256_CTX thread_ctx;
+  int inc_size = blockDim.x * num_blocks;
+  int max_iteration = 0xffffffff / inc_size;
+  nonce += idx;
+
+  BYTE threadBlock[80];
+  #pragma unroll 80
+  for(int i = 0; i < 80; i++){
+    threadBlock[i] = block_d[i];
+  }
+
+  BYTE hash_t_i[32];
+  BYTE hash_t_f[32];
+  #pragma unroll 32
+  for(int i = 0; i < 32; i++){
+    hash_t_i[i] = 0x00;
+    hash_t_f[i] = 0x00;
+  }
+
+  while(flag_d[0] == 0){
+    if(iteration < max_iteration){
+      iteration++;
+    }else{ // UPDATE TIME
+      iteration = 0;
+      threadBlock[68] = time_d[0];
+      threadBlock[69] = time_d[1];
+      threadBlock[70] = time_d[2];
+      threadBlock[71] = time_d[3];
+      if(idx == 0){
+        printf("NEW TIME %02x%02x%02x%02x\n\n", time_d[0], time_d[1], time_d[2], time_d[3]);
+      }
+    }
+
+    threadBlock[76] = (BYTE)(nonce >> 24) & 0xFF;
+    threadBlock[77] = (BYTE)(nonce >> 16) & 0xFF;
+    threadBlock[78] = (BYTE)(nonce >> 8) & 0xFF;
+    threadBlock[79] = (BYTE)(nonce & 0xFF);
+
+    sha256_init(&thread_ctx);
+    sha256_update(&thread_ctx, threadBlock, 64);
+    sha256_update(&thread_ctx, &(threadBlock[64]), 16);
+    sha256_final(&thread_ctx, hash_t_i);
+
+    sha256_init(&thread_ctx);
+    sha256_update(&thread_ctx, hash_t_i, 32);
+    success = sha256_final_target(&thread_ctx, hash_t_f, target, compare);
+
+    if(success == 0){
+      nonce += inc_size;
+    }else{
+      flag_d[0] = 1;
+      nonce_f[0] = threadBlock[76];
+      nonce_f[1] = threadBlock[77];
+      nonce_f[2] = threadBlock[78];
+      nonce_f[3] = threadBlock[79];
+      block_d[76] = threadBlock[76];
+      block_d[77] = threadBlock[77];
+      block_d[78] = threadBlock[78];
+      block_d[79] = threadBlock[79];
+
+      #pragma unroll 80
+      for(int i = 0; i < 80; i++){
+        block_d[i] = threadBlock[i];
+      }
+      #pragma unroll 32
+      for(int i = 0; i < 32; i++){
+        hash_d[i] = hash_t_f[i];
+      }
+      break;
+    }
+  }
+}
+
+__global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks){
+  SHA256_CTX ctx;
+  // Shared memory for sharing hash results
+  __shared__ BYTE local_mem_in[PARENT_BLOCK_SIZE][64];
+  __shared__ BYTE local_mem_out[PARENT_BLOCK_SIZE][32];
+  int tree_size = pow(2.0, ceil(log2((double)buffer_blocks)));
+
+  // SET UP HASH TREE THREADS
+  if(threadIdx.x < buffer_blocks){
+    //SET UP UNIQUE THREADS
+    for(int i = 0; i < 32; i++){
+      local_mem_in[threadIdx.x][i] = pHash_d[threadIdx.x*32+i];
+    }
+
+    // Calculate first hash, store in shared memory
+    sha256_init(&ctx);
+    sha256_update(&ctx, local_mem_in[threadIdx.x], 32);
+    sha256_final(&ctx, local_mem_out[threadIdx.x]);
+
+    #pragma unroll 32
+    for(int i = 0; i < 32; i++){
+      local_mem_in[threadIdx.x][i] = local_mem_out[threadIdx.x][i];
+    }
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, local_mem_in[threadIdx.x], 32);
+    sha256_final(&ctx, local_mem_out[threadIdx.x]);
+
+    // Sequential hash reduction
+    // First iteration 0 = 0|1	2=2|3 	4=4|5		6=6|7
+    // Second iteration 0 = (0|1)|(2|3) 	4=(4|5)|(6|7)
+    // Third iteration 0 = ((0|1)|(2|3))|((4|5)|(6|7)), etc...
+    // Progressively loop to combine hashes
+    for(int i = 2; i <= tree_size; i*=2){
+      if(threadIdx.x % i == 0){
+        int mid = i/2;
+        if(threadIdx.x + mid < buffer_blocks){
+          #pragma unroll 32
+          for(int j = 0; j < 32; j++){
+            local_mem_in[threadIdx.x][j] = local_mem_out[threadIdx.x][j];
+            local_mem_in[threadIdx.x][32+j]= local_mem_out[threadIdx.x+mid][j];
+          }
+        }else{ // HASH TOGETHER DUPLICATES FOR UNMATCHED BRANCHES
+          #pragma unroll 32
+          for(int j = 0; j < 32; j++){
+            local_mem_in[threadIdx.x][j] = local_mem_out[threadIdx.x][j];
+            local_mem_in[threadIdx.x][32+j]= local_mem_out[threadIdx.x][j];
+          }
+        }
+        sha256_init(&ctx);
+        sha256_update(&ctx, local_mem_in[threadIdx.x], 64);
+        sha256_final(&ctx, local_mem_out[threadIdx.x]);
+
+        #pragma unroll 32
+        for(int j = 0; j < 32; j++){
+          local_mem_in[threadIdx.x][j] = local_mem_out[threadIdx.x][j];
+        }
+
+        sha256_init(&ctx);
+        sha256_update(&ctx, local_mem_in[threadIdx.x], 32);
+        sha256_final(&ctx, local_mem_out[threadIdx.x]);
+      }
+    }
+    // All values coalesce into thread 0 shared memory space, and then get read back
+    if(threadIdx.x == 0){
+      for(int i = 0; i < 32; i++){
+        pRoot_d[i] = local_mem_out[0][i];
+      }
+    }
+  }
+}
 
 
 
@@ -2198,3 +2440,9 @@ ________________________________________________________________________________
 /********************************************************************************************************************************************************************************************/
 /********************************************************************************************************************************************************************************************/
 //TODO ADD DEVICE FUNCTIONS
+
+__device__ void printHash(BYTE * hash){
+  printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x \n", hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], hash[8], hash[9],\
+  hash[10], hash[11], hash[12], hash[13], hash[14], hash[15], hash[16], hash[17], hash[18], hash[19],\
+  hash[20], hash[21], hash[22], hash[23], hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31]);
+}
