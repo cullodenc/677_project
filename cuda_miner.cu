@@ -222,8 +222,13 @@
      │   ├───minerKernel
      │   └───getMerkleRoot
      │
-     └───DEVICE_FUNCTIONS FIXME
+     └───DEVICE_FUNCTIONS
          ├───printHash
+         ├───sha256_transform
+         ├───sha256_init
+         ├───sha256_update
+         ├───sha256_final
+         └───sha256_final_target
 
 */
 
@@ -251,33 +256,58 @@
 #include <ctype.h>        // NEEDED FOR char OPERATION tolower
 #include <time.h>         // NEEDED FOR TIMESTAMPING
 
-//#include "cuda_sha.h"
-#include "sha256.h"
+// libraries for sha256
+#include <stddef.h>
+#include <memory.h>
+
 #include <cuda.h>
 
 /***************************************************************************************************************************************************************************/
 /*****************************************************************************TYPE DEFINITIONS******************************************************************************/
 /***************************************************************************************************************************************************************************/
-// FIXME
-//typedef unsigned char BYTE;
 
+typedef unsigned char BYTE;             // 8-bit byte
+typedef unsigned int  WORD;             // 32-bit word
+
+typedef struct {
+	BYTE data[64];
+	WORD datalen;
+	unsigned long long bitlen;
+	WORD state[8];
+} SHA256_CTX;
 
 /***************************************************************************************************************************************************************************/
 /****************************************************************************MACRO DEFINITIONS******************************************************************************/
 /***************************************************************************************************************************************************************************/
 
-// TODO
-
-
+#define ROTLEFT(a,b) (((a) << (b)) | ((a) >> (32-(b))))
+#define ROTRIGHT(a,b) (((a) >> (b)) | ((a) << (32-(b))))
+#define CH(x,y,z) (((x) & (y)) ^ (~(x) & (z)))
+#define MAJ(x,y,z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+#define EP0(x) (ROTRIGHT(x,2) ^ ROTRIGHT(x,13) ^ ROTRIGHT(x,22))
+#define EP1(x) (ROTRIGHT(x,6) ^ ROTRIGHT(x,11) ^ ROTRIGHT(x,25))
+#define SIG0(x) (ROTRIGHT(x,7) ^ ROTRIGHT(x,18) ^ ((x) >> 3))
+#define SIG1(x) (ROTRIGHT(x,17) ^ ROTRIGHT(x,19) ^ ((x) >> 10))
 
 /***************************************************************************************************************************************************************************/
 /**************************************************************************CONSTANT DEFINITIONS*****************************************************************************/
 /***************************************************************************************************************************************************************************/
-
+#define SHA256_BLOCK_SIZE 32            // SHA256 outputs a 32 byte digest
 #define BLOCK_SIZE sizeof(BYTE)*80
 #define HASH_SIZE sizeof(BYTE)*32
 #define NONCE_SIZE sizeof(BYTE)*4
 
+
+__constant__ WORD k[64] = { // SHA256 constants
+	0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+	0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+	0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+	0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+	0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+	0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+	0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+	0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+};
 
 
 /***************************************************************************************************************************************************************************/
@@ -363,8 +393,6 @@ __host__ void hostDeviceQuery(void);
 /*-----------------------------------------------------------------------------TEST FUNCTIONS------------------------------------------------------------------------------*/
 __host__ void hostFunctionalTest(void);
 __host__ void hostBenchmarkTest(int num_workers);
-
-// FIXME Move this with global functions
 
 // TODO ADD TESTING CORES HERE
 /*-----------------------------------------------------------------------------------||------------------------------------------------------------------------------------*/
@@ -466,13 +494,14 @@ __host__ void printOutputFile(char * outFileName, BYTE * block_h, BYTE * hash_f,
 
 /*---------------------------------------------------------------------------HASH TEST FUNCTIONS---------------------------------------------------------------------------*/
 __global__ void cudaTest(void);
+// FIXME ADD MORE TEST KERNELS HERE
 __global__ void benchmarkKernel(BYTE * block_d);
 
 /*-----------------------------------------------------------------------------MINING FUNCTIONS----------------------------------------------------------------------------*/
 __global__ void genTestHashes(BYTE * hash_df, BYTE * seed, int num_blocks);
 __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE * target, BYTE * time_d, int * flag_d, int compare, int num_blocks);
 __global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks);
-
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 /***************************************************************************************************************************************************************************/
 /************************************  _______________________________________________________________________________________________  ************************************/
@@ -483,20 +512,21 @@ __global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks)
 /************************************  |_____________________________________________________________________________________________|  ************************************/
 /************************************                                                                                                   ************************************/
 /***************************************************************************************************************************************************************************/
-
-// TODO ADD DEVICE FUNCTION DECLARATIONS HERE
 __device__ void printHash(BYTE * hash);
 
+/*-----------------------------------------------------------------------------SHA256 FUNCTIONS----------------------------------------------------------------------------*/
+
+__device__ void sha256_transform(SHA256_CTX *ctx, const BYTE data[]);
+__device__ void sha256_init(SHA256_CTX *ctx);
+__device__ void sha256_update(SHA256_CTX *ctx, const BYTE data[], size_t len);
+__device__ void sha256_final(SHA256_CTX *ctx, BYTE hash[]);
+__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], BYTE target[], int compare);
+
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 /***************************************************************************************************************************************************************************/
 /************************************************************************END FUNCTION DECLARATIONS**************************************************************************/
 /***************************************************************************************************************************************************************************/
-
-
-
-
-
-
 
 
 
@@ -726,6 +756,7 @@ if(errFile = fopen(error_filename, "w")){
     BYTE * nonce_h[num_workers];
     BYTE * nonce_d[num_workers];
     int * flag_d[num_workers];
+		int live_stream[num_workers];
 
     int chain_blocks[num_workers];
     int diff_level[num_workers];
@@ -746,6 +777,7 @@ if(errFile = fopen(error_filename, "w")){
     for(int i = 0; i < num_workers; i++){
         chain_blocks[i] = 0; diff_level[i] = 1; errEOF[i] = 0;
         createCudaVars(&t1[i], &t2[i], &streams[i]);
+				live_stream[i] = 1;
         cudaEventCreate(&diff_t1[i]);
         cudaEventCreate(&diff_t2[i]);
         allocMiningMemory(&target_h[i], &target_d[i], &nonce_h[i], &nonce_d[i], &flag_d[i]);
@@ -793,6 +825,7 @@ if(errFile = fopen(error_filename, "w")){
     BYTE * pnonce_d;
     int * pflag_d;
     int * flag_h;
+		int live_pstream;
 
     int worker_record[PARENT_BLOCK_SIZE];
     double pdifficulty;
@@ -813,6 +846,7 @@ if(errFile = fopen(error_filename, "w")){
           initializeParentOutputs(bfilename, hfilename);
       /*------------------------CHAIN INITIALIZATION---------------------------*/
           createCudaVars(&p1, &p2, &pStream);
+					live_pstream = 1;
           cudaEventCreate(&diff_p1);
           cudaEventCreate(&diff_p2);
           cudaEventCreate(&buff_p1);
@@ -880,129 +914,135 @@ cudaEventRecord(g_time[0], g_timeStream);
       for(int i = 0; i < num_workers; i++){
 
         if(multilevel == 1){  // CHECK PARENT MINER COMPLETION STATUS IF MULTILEVEL
-          if(cudaStreamQuery(pStream) == 0 && parentFlag == 1){   // PARENT CHAIN RESULTS ARE READY, PROCESS OUTPUTS AND PRINT
-            // processParent
-            pchain_blocks++;
-            returnMiner(&pStream, &pBlock_d,  &pHash_out_d, &pnonce_d, &pBlock_h,  &pHash_out_h, &pnonce_h);
-            cudaEventSynchronize(p2);
-            cudaEventElapsedTime(&ptimingResults, p1, p2);
-            printOutputFile(bfilename, &pBlock_h[0], pHash_out_h, pnonce_h, pchain_blocks, ptimingResults, pdifficulty, -1, 1);
-            updateParentHash(pBlock_h, pHash_out_h);
-            parentFlag = 0;
-          }
-          // PARENT CHAIN IS STILL PROCESSING LAST BLOCK, WAIT FOR COMPLETION
-          else if(parentFlag == 1 && pbuffer_blocks == PARENT_BLOCK_SIZE){
-                cudaError_t pErr = cudaStreamQuery(pStream);
-                char alert_buf_full[1000];
-                char alert_start[150] = "\n***********************************************************************\nALERT: PARENT BUFFER IS FULL AND PREVIOUS BLOCK IS NOT YET FINISHED!!!*\n";
-                char alert_end[150] = "BLOCKING UNTIL MINING RESOURCES ARE AVAILABLE...                      *\n***********************************************************************\n";
-                sprintf(alert_buf_full, "%sPARENT STREAM STATUS: [CODE: %i]:(%s: %s)*\n%s", alert_start, pErr, cudaGetErrorName(pErr), cudaGetErrorString(pErr), alert_end);
-                printDebug(alert_buf_full);
-                cudaEventRecord(errStart, errStream);
-                cudaEventRecord(buff_p2, pStream);
-                for(int j = 0; j < num_workers; j++){
-                  cudaEventSynchronize(diff_t2[i]);
-                  cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
-                }
-                // WAIT FOR PARENT TO FINISH, THEN RETRIEVE RESULTS
-                while(cudaStreamQuery(pStream) != 0){
-                  updateTime(&tStream, time_h, time_d);
-                  if(MINING_PROGRESS == 1){
-                    mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
-                  }
-                  // MONITOR WORKER TIMING WHILE WAITING
-                  for(int j = 0; j < num_workers; j++){
-                    if((cudaStreamQuery(streams[i]) == cudaSuccess && diff_timing[i] <= 0) && (chain_blocks[i] >= diff_level[i] * DIFFICULTY_LIMIT || FLAG_TARGET == 1)){
-                        cudaEventRecord(diff_t2[i], streams[i]);
-                        cudaEventSynchronize(diff_t2[i]);
-                        cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
-                    }
-                  }
-                }
-                cudaEventRecord(errFinish, errStream);
-                cudaStreamSynchronize(errStream);
-                cudaEventElapsedTime(&err_time, errStart, errFinish);
-                printErrorTime(error_filename, (char*)"PARENT BUFFER IS FULL AND PREVIOUS BLOCK IS NOT YET FINISHED!!!", err_time);
+					if(live_pstream == 1){ // MAKE SURE PARENT STREAM IS ALIVE BEFORE CHECKING IT
+	          if(cudaStreamQuery(pStream) == 0 && parentFlag == 1){   // PARENT CHAIN RESULTS ARE READY, PROCESS OUTPUTS AND PRINT
+	            // processParent
+	            pchain_blocks++;
+	            returnMiner(&pStream, &pBlock_d,  &pHash_out_d, &pnonce_d, &pBlock_h,  &pHash_out_h, &pnonce_h);
+	            cudaEventSynchronize(p2);
+	            cudaEventElapsedTime(&ptimingResults, p1, p2);
+	            printOutputFile(bfilename, &pBlock_h[0], pHash_out_h, pnonce_h, pchain_blocks, ptimingResults, pdifficulty, -1, 1);
+	            updateParentHash(pBlock_h, pHash_out_h);
+	            parentFlag = 0;
+	          }
+	          // PARENT CHAIN IS STILL PROCESSING LAST BLOCK, WAIT FOR COMPLETION
+	          else if(parentFlag == 1 && pbuffer_blocks == PARENT_BLOCK_SIZE){
+	                cudaError_t pErr = cudaStreamQuery(pStream);
+	                char alert_buf_full[1000];
+	                char alert_start[150] = "\n***********************************************************************\nALERT: PARENT BUFFER IS FULL AND PREVIOUS BLOCK IS NOT YET FINISHED!!!*\n";
+	                char alert_end[150] = "BLOCKING UNTIL MINING RESOURCES ARE AVAILABLE...                      *\n***********************************************************************\n";
+	                sprintf(alert_buf_full, "%sPARENT STREAM STATUS: [CODE: %i]:(%s: %s)*\n%s", alert_start, pErr, cudaGetErrorName(pErr), cudaGetErrorString(pErr), alert_end);
+	                printDebug(alert_buf_full);
+	                cudaEventRecord(errStart, errStream);
+	                cudaEventRecord(buff_p2, pStream);
+	                for(int j = 0; j < num_workers; j++){
+	                  cudaEventSynchronize(diff_t2[i]);
+	                  cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
+	                }
+	                // WAIT FOR PARENT TO FINISH, THEN RETRIEVE RESULTS
+	                while(cudaStreamQuery(pStream) != 0){
+	                  updateTime(&tStream, time_h, time_d);
+	                  if(MINING_PROGRESS == 1){
+	                    mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
+	                  }
+	                  // MONITOR WORKER TIMING WHILE WAITING
+	                  for(int j = 0; j < num_workers; j++){
+											if(live_stream[i] == 1){ // ONLY CHECK LIVING WORKERS
+		                    if((cudaStreamQuery(streams[i]) == cudaSuccess && diff_timing[i] <= 0) && (chain_blocks[i] >= diff_level[i] * DIFFICULTY_LIMIT || FLAG_TARGET == 1)){
+		                        cudaEventRecord(diff_t2[i], streams[i]);
+		                        cudaEventSynchronize(diff_t2[i]);
+		                        cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
+		                    }
+											}
+	                  }
+	                }
+	                cudaEventRecord(errFinish, errStream);
+	                cudaStreamSynchronize(errStream);
+	                cudaEventElapsedTime(&err_time, errStart, errFinish);
+	                printErrorTime(error_filename, (char*)"PARENT BUFFER IS FULL AND PREVIOUS BLOCK IS NOT YET FINISHED!!!", err_time);
 
-                pchain_blocks++;
-                returnMiner(&pStream, &pBlock_d,  &pHash_out_d, &pnonce_d, &pBlock_h,  &pHash_out_h, &pnonce_h);
-                cudaEventSynchronize(p2);
-                cudaEventElapsedTime(&ptimingResults, p1, p2);
-                printOutputFile(bfilename, &pBlock_h[0], pHash_out_h, pnonce_h, pchain_blocks, ptimingResults, pdifficulty, -1, 1);
-                updateParentHash(pBlock_h, pHash_out_h);
-                parentFlag = 0;
-          }
-          // PARENT BUFFER IS READY, EXIT FOR LOOP TO BEGIN PARENT EXECUTION
-          if(pbuffer_blocks == PARENT_BLOCK_SIZE){
-              printDebug("NEW PARENT BLOCK IS READY!\n");
-              break;
-          }
+	                pchain_blocks++;
+	                returnMiner(&pStream, &pBlock_d,  &pHash_out_d, &pnonce_d, &pBlock_h,  &pHash_out_h, &pnonce_h);
+	                cudaEventSynchronize(p2);
+	                cudaEventElapsedTime(&ptimingResults, p1, p2);
+	                printOutputFile(bfilename, &pBlock_h[0], pHash_out_h, pnonce_h, pchain_blocks, ptimingResults, pdifficulty, -1, 1);
+	                updateParentHash(pBlock_h, pHash_out_h);
+	                parentFlag = 0;
+	          }
+	          // PARENT BUFFER IS READY, EXIT FOR LOOP TO BEGIN PARENT EXECUTION
+	          if(pbuffer_blocks == PARENT_BLOCK_SIZE){
+	              printDebug("NEW PARENT BLOCK IS READY!\n");
+	              break;
+	          }
+					}
         } // END PARENT CHAIN MONITOR
         // PROCESS WORKER RESULTS AND START NEXT BLOCK IF THE TARGET HAS NOT BEEN MET
-        if(cudaStreamQuery(streams[i]) == cudaSuccess && errEOF[i] != 1){
-          // UPDATE WORKER COUNTERS
-          chain_blocks[i]++;
-          block_total++;
-          // GET RESULTS AND TIME FOR PRINTING
-          returnMiner(&streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i]);
-          cudaEventSynchronize(t2[i]);
-          cudaEventElapsedTime(&timingResults[i], t1[i], t2[i]);
-          printOutputFile(outFiles[i], block_h[i], hash_h[i], nonce_h[i], chain_blocks[i], timingResults[i], difficulty[i], i, 1);
-          // PRINT TO PARENT HASH FILE AND ADD RESULTS TO PARENT BUFFER IF MULTILEVEL
-          if(multilevel == 1){
-            printOutputFile(hfilename, block_h[i], hash_h[i], nonce_h[i], chain_blocks[i], timingResults[i], difficulty[i], i, 0);
-            // COPY HASH TO THE PARENT BUFFER
-            for(int j = 0; j < 32; j++){
-              pHash_h[pbuffer_blocks][j] = hash_h[i][j];
-            }
-            worker_record[pbuffer_blocks] = i+1;
-            pbuff_diffSum+=difficulty[i];
-            pbuffer_blocks++;
-          }
-          // INCREMENT DIFFICULTY IF THE LIMIT HAS BEEN REACHED (PRINT IF TARGET HAS BEEN REACHED)
-          if(chain_blocks[i] >= diff_level[i] * DIFFICULTY_LIMIT || FLAG_TARGET == 1){
-            // PRINT DIFFICULTY BLOCK STATISTICS
-            cudaEventSynchronize(diff_t2[i]);
-            cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
-            if(diff_timing[i] <= 0){ // DIFF TIMER NOT YET RECORDED, RECORD EVENT NOW
-              cudaEventRecord(diff_t2[i], streams[i]);
-              cudaEventSynchronize(diff_t2[i]);
-              cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
-            }
-    //        cudaEventRecord(diff_t2[i], streams[i]);
-    //        cudaEventSynchronize(diff_t2[i]);
-    //        cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
-            printDifficulty(outFiles[i], i+1, difficulty[i], diff_timing[i], (chain_blocks[i]-(diff_level[i]-1)*DIFFICULTY_LIMIT));
+				if(live_stream[i] == 1){ // ONLY PROCEED IF THE STREAM ISN'T DEAD
+	        if(cudaStreamQuery(streams[i]) == cudaSuccess && errEOF[i] != 1){
+	          // UPDATE WORKER COUNTERS
+	          chain_blocks[i]++;
+	          block_total++;
+	          // GET RESULTS AND TIME FOR PRINTING
+	          returnMiner(&streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i]);
+	          cudaEventSynchronize(t2[i]);
+	          cudaEventElapsedTime(&timingResults[i], t1[i], t2[i]);
+	          printOutputFile(outFiles[i], block_h[i], hash_h[i], nonce_h[i], chain_blocks[i], timingResults[i], difficulty[i], i, 1);
+	          // PRINT TO PARENT HASH FILE AND ADD RESULTS TO PARENT BUFFER IF MULTILEVEL
+	          if(multilevel == 1){
+	            printOutputFile(hfilename, block_h[i], hash_h[i], nonce_h[i], chain_blocks[i], timingResults[i], difficulty[i], i, 0);
+	            // COPY HASH TO THE PARENT BUFFER
+	            for(int j = 0; j < 32; j++){
+	              pHash_h[pbuffer_blocks][j] = hash_h[i][j];
+	            }
+	            worker_record[pbuffer_blocks] = i+1;
+	            pbuff_diffSum+=difficulty[i];
+	            pbuffer_blocks++;
+	          }
+	          // INCREMENT DIFFICULTY IF THE LIMIT HAS BEEN REACHED (PRINT IF TARGET HAS BEEN REACHED)
+	          if(chain_blocks[i] >= diff_level[i] * DIFFICULTY_LIMIT || FLAG_TARGET == 1){
+	            // PRINT DIFFICULTY BLOCK STATISTICS
+	            cudaEventSynchronize(diff_t2[i]);
+	            cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
+	            if(diff_timing[i] <= 0){ // DIFF TIMER NOT YET RECORDED, RECORD EVENT NOW
+	              cudaEventRecord(diff_t2[i], streams[i]);
+	              cudaEventSynchronize(diff_t2[i]);
+	              cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
+	            }
+	    //        cudaEventRecord(diff_t2[i], streams[i]);
+	    //        cudaEventSynchronize(diff_t2[i]);
+	    //        cudaEventElapsedTime(&diff_timing[i], diff_t1[i], diff_t2[i]);
+	            printDifficulty(outFiles[i], i+1, difficulty[i], diff_timing[i], (chain_blocks[i]-(diff_level[i]-1)*DIFFICULTY_LIMIT));
+	            // INCREMENT IF TARGET HASN'T BEEN REACHED
+	            if(FLAG_TARGET == 0){
+	              updateDifficulty(block_h[i], diff_level[i]);
+	              getDifficulty(block_h[i], &target_h[i], &target_length[i], &difficulty[i], i+1);
+	              cudaMemcpyAsync(target_d[i], target_h[i], HASH_SIZE, cudaMemcpyHostToDevice, streams[i]);
+	              cudaEventRecord(diff_t1[i], streams[i]);
+	              diff_level[i]++;
+	            }
+	          }
 
-            // INCREMENT IF TARGET HASN'T BEEN REACHED
-            if(FLAG_TARGET == 0){
-              updateDifficulty(block_h[i], diff_level[i]);
-              getDifficulty(block_h[i], &target_h[i], &target_length[i], &difficulty[i], i+1);
-              cudaMemcpyAsync(target_d[i], target_h[i], HASH_SIZE, cudaMemcpyHostToDevice, streams[i]);
-              cudaEventRecord(diff_t1[i], streams[i]);
-              diff_level[i]++;
-            }
-          }
-
-          // MINE NEXT BLOCK ON THIS WORKER IF TARGET HASN'T BEEN REACHED
-          if(FLAG_TARGET == 0){
-            errEOF[i] = updateBlock(inFiles[i], block_h[i], hash_h[i]);
-            if(errEOF[i] == 1){
-              char eof_str[20];
-              sprintf(eof_str, "WORKER %i INPUT EOF!", i+1);
-              printErrorTime(error_filename, eof_str, 0.0);
-            }
-            logStart(i, chain_blocks[i]+1, hash_h[i]);
-            cudaEventRecord(t1[i], streams[i]);
-            launchMiner(MAX_BLOCKS/num_workers, &streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i], &target_d[i], &time_d, &flag_d[i], flag_h, &target_length[i]);
-            cudaEventRecord(t2[i], streams[i]);
-          } else{ // EXECUTION COMPLETED, DELETE CUDA VARS TO PREVENT ADDITIONAL ENTRY INTO THIS CASE
-            destroyCudaVars(&t1[i], &t2[i], &streams[i]);
-            cudaEventDestroy(diff_t1[i]);
-            cudaEventDestroy(diff_t2[i]);
-            PROC_REMAINING--;
-          }
-        }
+	          // MINE NEXT BLOCK ON THIS WORKER IF TARGET HASN'T BEEN REACHED
+	          if(FLAG_TARGET == 0){
+	            errEOF[i] = updateBlock(inFiles[i], block_h[i], hash_h[i]);
+	            if(errEOF[i] == 1){
+	              char eof_str[20];
+	              sprintf(eof_str, "WORKER %i INPUT EOF!", i+1);
+	              printErrorTime(error_filename, eof_str, 0.0);
+	            }
+	            logStart(i, chain_blocks[i]+1, hash_h[i]);
+	            cudaEventRecord(t1[i], streams[i]);
+	            launchMiner(MAX_BLOCKS/num_workers, &streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i], &target_d[i], &time_d, &flag_d[i], flag_h, &target_length[i]);
+	            cudaEventRecord(t2[i], streams[i]);
+	          } else{ // EXECUTION COMPLETED, DELETE CUDA VARS TO PREVENT ADDITIONAL ENTRY INTO THIS CASE
+							destroyCudaVars(&t1[i], &t2[i], &streams[i]);
+							live_stream[i] = 0; // INDICATES THAT THE STREAM IS DEAD, DONT CHECK IT ANY MORE!!
+	            cudaEventDestroy(diff_t1[i]);
+	            cudaEventDestroy(diff_t2[i]);
+	            PROC_REMAINING--;
+	          }
+	        }
+				}
       } // FOR LOOP END
       /*--------------------------------------------------------------------------------------------------------------------------------*/
       /**********************************************START PARENT MINING WHEN BUFFER IS FULL*********************************************/
@@ -1086,6 +1126,7 @@ cudaEventRecord(g_time[0], g_timeStream);
             printDifficulty(bfilename, -1, pdifficulty, pdiff_timing, (pchain_blocks-(pdiff_level-1)*DIFFICULTY_LIMIT));
             // CLEAN UP PARENT CUDA VARS, SET PROCS_REMAINING TO ZERO TO EXIT
             destroyCudaVars(&p1, &p2, &pStream);
+						live_pstream = 0;
             cudaEventDestroy(diff_p1);
             cudaEventDestroy(diff_p2);
             cudaEventDestroy(buff_p1);
@@ -2445,4 +2486,191 @@ __device__ void printHash(BYTE * hash){
   printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x \n", hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], hash[8], hash[9],\
   hash[10], hash[11], hash[12], hash[13], hash[14], hash[15], hash[16], hash[17], hash[18], hash[19],\
   hash[20], hash[21], hash[22], hash[23], hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31]);
+}
+
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/******************************************************************************SHA256 FUNCTIONS*****************************************************************************/
+
+__device__ void sha256_transform(SHA256_CTX *ctx, const BYTE data[])
+{
+	WORD a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
+
+	for (i = 0, j = 0; i < 16; ++i, j += 4)
+		m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);
+	for ( ; i < 64; ++i)
+		m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
+	a = ctx->state[0];
+	b = ctx->state[1];
+	c = ctx->state[2];
+	d = ctx->state[3];
+	e = ctx->state[4];
+	f = ctx->state[5];
+	g = ctx->state[6];
+	h = ctx->state[7];
+
+	for (i = 0; i < 64; ++i) {
+		t1 = h + EP1(e) + CH(e,f,g) + k[i] + m[i];
+		t2 = EP0(a) + MAJ(a,b,c);
+		h = g;
+		g = f;
+		f = e;
+		e = d + t1;
+		d = c;
+		c = b;
+		b = a;
+		a = t1 + t2;
+	}
+	// UNSAFE ADDITION?
+	ctx->state[0] += a;
+	ctx->state[1] += b;
+	ctx->state[2] += c;
+	ctx->state[3] += d;
+	ctx->state[4] += e;
+	ctx->state[5] += f;
+	ctx->state[6] += g;
+	ctx->state[7] += h;
+}
+
+__device__ void sha256_init(SHA256_CTX *ctx)
+{
+	ctx->datalen = 0;
+	ctx->bitlen = 0;
+	ctx->state[0] = 0x6a09e667;
+	ctx->state[1] = 0xbb67ae85;
+	ctx->state[2] = 0x3c6ef372;
+	ctx->state[3] = 0xa54ff53a;
+	ctx->state[4] = 0x510e527f;
+	ctx->state[5] = 0x9b05688c;
+	ctx->state[6] = 0x1f83d9ab;
+	ctx->state[7] = 0x5be0cd19;
+}
+
+__device__ void sha256_update(SHA256_CTX *ctx, const BYTE data[], size_t len)
+{
+	WORD i;
+
+	for (i = 0; i < len; ++i) {
+		ctx->data[ctx->datalen] = data[i];
+		ctx->datalen++;
+		if (ctx->datalen == 64) {
+			sha256_transform(ctx, ctx->data);
+			ctx->bitlen += 512;
+			ctx->datalen = 0;
+		}
+	}
+}
+
+__device__ void sha256_final(SHA256_CTX *ctx, BYTE hash[])
+{
+	WORD i;
+
+	i = ctx->datalen;
+
+	// Pad whatever data is left in the buffer.
+	if (ctx->datalen < 56) {
+		ctx->data[i++] = 0x80;
+		while (i < 56)
+			ctx->data[i++] = 0x00;
+	}
+	else {
+		ctx->data[i++] = 0x80;
+		while (i < 64)
+			ctx->data[i++] = 0x00;
+		sha256_transform(ctx, ctx->data);
+		memset(ctx->data, 0, 56);
+	}
+
+	// Append to the padding the total message's length in bits and transform.
+	ctx->bitlen += ctx->datalen * 8;
+	ctx->data[63] = ctx->bitlen;
+	ctx->data[62] = ctx->bitlen >> 8;
+	ctx->data[61] = ctx->bitlen >> 16;
+	ctx->data[60] = ctx->bitlen >> 24;
+	ctx->data[59] = ctx->bitlen >> 32;
+	ctx->data[58] = ctx->bitlen >> 40;
+	ctx->data[57] = ctx->bitlen >> 48;
+	ctx->data[56] = ctx->bitlen >> 56;
+	sha256_transform(ctx, ctx->data);
+
+	// Since this implementation uses little endian byte ordering and SHA uses big endian,
+	// reverse all the bytes when copying the final state to the output hash.
+	for (i = 0; i < 4; ++i) {
+		hash[i]      = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 4]  = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 8]  = (ctx->state[2] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 12] = (ctx->state[3] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 16] = (ctx->state[4] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 20] = (ctx->state[5] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 24] = (ctx->state[6] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 28] = (ctx->state[7] >> (24 - i * 8)) & 0x000000ff;
+	}
+}
+
+
+__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], BYTE target[], int compare)
+{
+	WORD i;
+
+	i = ctx->datalen;
+
+	// Pad whatever data is left in the buffer.
+	if (ctx->datalen < 56) {
+		ctx->data[i++] = 0x80;
+		while (i < 56)
+			ctx->data[i++] = 0x00;
+	}
+	else {
+		ctx->data[i++] = 0x80;
+		while (i < 64)
+			ctx->data[i++] = 0x00;
+		sha256_transform(ctx, ctx->data);
+		memset(ctx->data, 0, 56);
+	}
+
+	// Append to the padding the total message's length in bits and transform.
+	ctx->bitlen += ctx->datalen * 8;
+	ctx->data[63] = ctx->bitlen;
+	ctx->data[62] = ctx->bitlen >> 8;
+	ctx->data[61] = ctx->bitlen >> 16;
+	ctx->data[60] = ctx->bitlen >> 24;
+	ctx->data[59] = ctx->bitlen >> 32;
+	ctx->data[58] = ctx->bitlen >> 40;
+	ctx->data[57] = ctx->bitlen >> 48;
+	ctx->data[56] = ctx->bitlen >> 56;
+	sha256_transform(ctx, ctx->data);
+
+	for (i = 0; i < 4; ++i) {
+		hash[i + 28] = (ctx->state[0] >> (i * 8)) & 0xff;
+		hash[i + 24] = (ctx->state[1] >> (i * 8)) & 0xff;
+		hash[i + 20] = (ctx->state[2] >> (i * 8)) & 0xff;
+		hash[i + 16] = (ctx->state[3] >> (i * 8)) & 0xff;
+		hash[i + 12] = (ctx->state[4] >> (i * 8)) & 0xff;
+		hash[i + 8]  = (ctx->state[5] >> (i * 8)) & 0xff;
+		hash[i + 4]  = (ctx->state[6] >> (i * 8)) & 0xff;
+		hash[i]      = (ctx->state[7] >> (i * 8)) & 0xff;
+	}
+
+	int success = 1;
+	for(int i = 0; i < compare; i++){
+		if(hash[i] > target[i]){
+			success = 0;
+		}
+	}
+
+
+	// Since this implementation uses little endian byte ordering and SHA uses big endian,
+	// reverse all the bytes when copying the final state to the output hash.
+	for (i = 0; i < 4; ++i) {
+		hash[i]      = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 4]  = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 8]  = (ctx->state[2] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 12] = (ctx->state[3] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 16] = (ctx->state[4] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 20] = (ctx->state[5] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 24] = (ctx->state[6] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 28] = (ctx->state[7] >> (24 - i * 8)) & 0x000000ff;
+	}
+
+	// Store little endian ordering for bytewise comparison against the desired target
+	return success;
 }
