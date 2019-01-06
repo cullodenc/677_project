@@ -138,6 +138,7 @@
      │   ├───TESTING
      │   │   ├───hostDeviceQuery
      │   │   ├───hostFunctionalTest
+     │   │   ├───testHash
      │   │   ├───hostBenchmarkTest
      FIXME
      │   ├───MEMORY
@@ -218,6 +219,7 @@
      │
      ├───GLOBAL_FUNCTIONS
      │   ├───benchmarkKernel
+     │   ├───hashTestKernel
      │   ├───genTestHashes
      │   ├───minerKernel
      │   └───getMerkleRoot
@@ -392,6 +394,7 @@ __host__ void hostDeviceQuery(void);
 
 /*-----------------------------------------------------------------------------TEST FUNCTIONS------------------------------------------------------------------------------*/
 __host__ void hostFunctionalTest(void);
+__host__ void testHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE * test_d, BYTE * result_h, BYTE * result_d, int test_size, int double_hash, char ** logStr);
 __host__ void hostBenchmarkTest(int num_workers);
 
 // TODO ADD TESTING CORES HERE
@@ -496,6 +499,7 @@ __host__ void printOutputFile(char * outFileName, BYTE * block_h, BYTE * hash_f,
 __global__ void cudaTest(void);
 // FIXME ADD MORE TEST KERNELS HERE
 __global__ void benchmarkKernel(BYTE * block_d);
+__global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size);
 
 /*-----------------------------------------------------------------------------MINING FUNCTIONS----------------------------------------------------------------------------*/
 __global__ void genTestHashes(BYTE * hash_df, BYTE * seed, int num_blocks);
@@ -564,7 +568,7 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
       strcpy(arg_in, argv[i]);
       char * p = arg_in;
       for( ; *p; ++p) *p = tolower(*p);
-      printf("\nARGUMENT %i: %s\n", i, arg_in);
+      //printf("\nARGUMENT %i: %s\n", i, arg_in);
       // CHECK FOR INFORMATION OPTIONS AND FUNCTION SWITCHES FIRST
       if(strcmp(arg_in, "--help") == 0){  // HELP OPTION
         help_flag = 1;
@@ -660,7 +664,7 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
     }
     // RUN FUNCTIONAL TEST FOR THE HASHING FUNCTIONS
     if(test_flag == 1){
-      printf("FUNCTIONAL TESTING SELECTED!!!!! (TODO: ADD FUNC TEST FOR SINGLE/DOUBLE SHA256 & MERKLE ROOT)\n\n");
+      printf("FUNCTIONAL TESTING SELECTED!!!!!\n\n");
       hostFunctionalTest();
     }
     // RUN BENCHMARK TEST FOR DEVICE PERFORMANCE
@@ -1333,8 +1337,108 @@ __host__ void hostDeviceQuery(void){
 /*******************************************************************************TEST FUNCTIONS******************************************************************************/
 __host__ void hostFunctionalTest(void){
   printf("STARTING FUNCTIONAL TEST\n");
+	// INITIALIZE BENCHMARK VARIABLES
+  BYTE * test_h;
+  BYTE * test_d;
+	BYTE * result_h;
+	BYTE * result_d;
 
+	BYTE test_str[161];
+	BYTE correct_str[65];
 
+	int logSize = 500;
+  char logResult[2000];
+	char * logStr;
+	char logMsg[logSize];
+
+  // Allocate test block memory
+  test_h = (BYTE *)malloc(BLOCK_SIZE);
+  cudaMalloc((void **) &test_d, BLOCK_SIZE);
+	result_h = (BYTE *)malloc(HASH_SIZE);
+	cudaMalloc((void **) &result_d, HASH_SIZE);
+
+	// Prepare logging variables
+  logStr = (char*)malloc(sizeof(char) * logSize);
+	strcpy(logResult, "\n****************************HASHING FUNCTIONAL TESTS****************************\n");
+
+	// HASH TESTS
+	// Simple input 'abcd'
+	strcpy((char*)test_str, "61626364");
+	strcpy((char*)correct_str, "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589");
+	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 4, 0, &logStr);
+	sprintf(logMsg, "BASIC TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+	strcat(logResult, logMsg);
+
+	// 32 BYTE MESSAGE
+	strcpy((char*)test_str, "1979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f56");
+	strcpy((char*)correct_str, "928e8c1f694fc888316690b3c05573c226785344941bed6016909aefb07ecb6d");
+	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 32, 0, &logStr);
+	sprintf(logMsg, "32-BYTE TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+	strcat(logResult, logMsg);
+
+	// 64 BYTE MESSAGE
+	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e");
+	strcpy((char*)correct_str, "8e8ce198ef7f22243d9ed05b336b49a8051003a45c5e746ae2d7965d9d93b072");
+	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 64, 0, &logStr);
+	sprintf(logMsg, "64-BYTE TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+	strcat(logResult, logMsg);
+
+	// 80 BYTE MESSAGE
+	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
+	strcpy((char*)correct_str, "c45337946ef4402f6bf49e03039ca5d1dcf5edb5f885110fdb3f2e690d2ccb35");
+	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0, &logStr);
+	sprintf(logMsg, "BLOCK TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+	strcat(logResult, logMsg);
+
+	// 80 BYTE MESSAGE (DOUBLE HASH)
+	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
+	strcpy((char*)correct_str, "265a66f42191c9f6b26a1b9d4609d76a0b5fdacf9b82b6de8a3b3e904f000000");
+	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 1, &logStr);
+	sprintf(logMsg, "DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+	strcat(logResult, logMsg);
+
+	strcat(logResult, "********************************************************************************\n\n");
+  printLog(logResult);
+
+	free(test_h);
+  cudaFree(test_d);
+	free(result_h);
+	cudaFree(result_d);
+  return;
+
+}
+
+__host__ void testHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE * test_d, BYTE * result_h, BYTE * result_d, int test_size, int double_hash, char ** logStr){
+	BYTE result_str[65];
+	BYTE correct_hex[32];
+	int hash_match;
+
+	memset(test_h, 0, BLOCK_SIZE);
+	cudaMemcpy(result_d, test_h, HASH_SIZE, cudaMemcpyHostToDevice);
+	encodeHex(test_str, test_h, test_size*2);
+
+	cudaMemcpy(test_d, test_h, BLOCK_SIZE, cudaMemcpyHostToDevice);
+	hashTestKernel<<<1, 1>>>(test_d, result_d, test_size);
+	cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost);
+	cudaDeviceSynchronize();
+
+	if(double_hash == 1){
+		cudaMemcpy(test_d, result_d, HASH_SIZE, cudaMemcpyHostToDevice);
+		hashTestKernel<<<1, 1>>>(test_d, result_d, 32);
+		cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost);
+	}
+	cudaDeviceSynchronize();
+	decodeHex(result_h, result_str, 32);
+
+	// Compare results
+	encodeHex(correct_str, correct_hex, 64);
+	hash_match = strcmp((char*)result_str, (char*)correct_str);
+	if(hash_match == 0){
+		strcpy(*logStr, "SUCCESS");
+	}else{
+		sprintf(*logStr, "FAILED\n \t\tEXPECTED: %s\n \t\tRECEIVED: %s", correct_str, result_str);
+	}
+	return;
 }
 
 __host__ void hostBenchmarkTest(int num_workers){
@@ -1362,8 +1466,6 @@ __host__ void hostBenchmarkTest(int num_workers){
   cudaEventRecord(bench_s, bench_stream);
   cudaMemcpyAsync(test_block_d, test_block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, bench_stream);
   benchmarkKernel<<<MAX_BLOCKS/num_workers, NUM_THREADS, 0, bench_stream>>>(test_block_d);
-  //TODO ADD KERNEL CALL HERE
-
   cudaEventRecord(bench_f, bench_stream);
 
   cudaDeviceSynchronize();
@@ -2283,6 +2385,17 @@ __global__ void benchmarkKernel(BYTE * block_d){
  			nonce += inc_size;
  	  }
  }
+
+__global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size){
+	SHA256_CTX thread_ctx;
+
+	sha256_init(&thread_ctx);
+	sha256_update(&thread_ctx, test_block, size);
+	sha256_final(&thread_ctx, result_block);
+
+	return;
+}
+
 
  /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
  /***************************************************************************HASH MINING FUNCTIONS***************************************************************************/
