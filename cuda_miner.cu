@@ -440,17 +440,17 @@ int TEST_COUNT = 0;
 #define DIFFICULTY_LIMIT 32
 
 //#define TARGET_DIFFICULTY 256
-#define TARGET_DIFFICULTY 1024
-//#define TARGET_DIFFICULTY 2
+//#define TARGET_DIFFICULTY 1024
+int TARGET_DIFFICULTY = 1;
 
-//#define TARGET_BLOCKS DIFFICULTY_LIMIT*TARGET_DIFFICULTY
-#define TARGET_BLOCKS 32
+#define TARGET_BLOCKS DIFFICULTY_LIMIT*TARGET_DIFFICULTY
+//#define TARGET_BLOCKS 32
 
 // INPUTS GENERATED = LOOPS * NUM_THREADS * NUM_BLOCKS
 #define INPUT_LOOPS 25
 
 // Exponentially reduce computation time, 0 is normal, positive values up to 3 drastically reduce difficulty
-int DIFF_REDUCE = 1;
+int DIFF_REDUCE = 2;
 
 // INITIALIZE DEFAULT GLOBAL VARIABLES FOR COMMAND LINE OPTIONS
 // INFORMATIVE COMMAND OPTIONS
@@ -463,6 +463,9 @@ int NUM_WORKERS = 1;      // NUMBER OF WORKERS 1 BY DEFAULT
 
 // MINING COMMAND OPTIONS
 // FIXME: ADD NUM_THREADS, MAX_BLOCKS, OPTIMIZE_BLOCKS, etc. here
+
+#define WORKER_BLOCKS MAX_BLOCKS/NUM_WORKERS
+
 
 
 /***************************************************************************************************************************************************************************/
@@ -616,7 +619,7 @@ __device__ void sha256_transform(SHA256_CTX *ctx, const BYTE data[]);
 __device__ void sha256_init(SHA256_CTX *ctx);
 __device__ void sha256_update(SHA256_CTX *ctx, const BYTE data[], size_t len);
 __device__ void sha256_final(SHA256_CTX *ctx, BYTE hash[]);
-__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], BYTE target[], int compare);
+__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], volatile BYTE target[], volatile int compare);
 
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -680,7 +683,7 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
         printf("PROFILER FUNCTIONS ENABLED\n");
 				// TODO ADD NVTX TO LABEL STREAMS AND ADD EVENTS (SEE NVIDIA PROFILER GUIDE FOR MORE DETAILS)
 				// TODO PRIOR TO EXECUTION, SET DIFF_REDUCE TO 2 OR MORE TO TRY REDUCE PROFILING OVERHEAD
-				DIFF_REDUCE = 2;
+				//DIFF_REDUCE = 2; // TOO EASY,
       }
       else if(strcmp(arg_in, "--indicator") == 0){  // MINING INDICATOR OPTION
         MINING_PROGRESS = 1;
@@ -719,6 +722,23 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
             break;
           }
       }
+			else if(strcmp(arg_in, "-t") == 0){
+					if(i+1 < argc){
+						if(atoi(argv[i+1]) > 0){
+							TARGET_DIFFICULTY = atoi(argv[i+1]);
+							printf("TARGET DIFFICULTY SET TO %i, MINING GOAL OF %i TOTAL BLOCKS\n", TARGET_DIFFICULTY, TARGET_BLOCKS);
+							i++;
+						} else{
+							printf("%s   fatal:  OPTION '-t' EXPECTS A POSITIVE INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							err_flag = 1;
+							break;
+						}
+					} else{
+						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-t'\n\n", argv[0]);
+						err_flag = 1;
+						break;
+					}
+			}
       //FIXME: ADD ADDITIONAL OPTIONS HERE FOR OTHER DESIGN PARAMETERS
 
   }
@@ -750,7 +770,8 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 \t --indicator \t\t ENABLE PROGRESS INDICATOR (DEFAULT: DISABLED)\n\t\t\t\t\t [!!WARNING!!-DO NOT USE INDICATOR IF WRITING CONSOLE OUTPUT TO A FILE]\n\n\
  DESIGN SPECIFIERS\n\n\
 \t --multi \t\t MULTILEVEL ARCHITECTURE (DEFAULT: DISABLED)\n\
-\t  -w #   \t\t NUMBER OF WORKER CHAINS AS A POSITIVE INTEGER (DEFAULT: 1)\n", argv[0]);
+\t  -w #   \t\t NUMBER OF WORKER CHAINS AS A POSITIVE INTEGER (DEFAULT: 1)\n\
+\t  -t #   \t\t THE TARGET DIFFICULTY AS A POSITIVE INTEGER (DEFAULT: 1)\n", argv[0]);
   }
   // RUN THE SELECTED IMPLEMENTATION(S)
   else{
@@ -797,6 +818,10 @@ float total_time[6];
 cudaStream_t g_timeStream;
 cudaEvent_t g_timeStart, g_timeFinish;
 createCudaVars(&g_timeStart, &g_timeFinish, &g_timeStream);
+
+char stream_name[50];
+sprintf(stream_name, "TIME STREAM");
+NAME_STREAM(g_timeStream, stream_name);
 
 cudaEvent_t g_time[4];
 for(int i = 0; i < 4; i++){
@@ -878,6 +903,8 @@ if(errFile = fopen(error_filename, "w")){
     for(int i = 0; i < num_workers; i++){
         chain_blocks[i] = 0; diff_level[i] = 1; errEOF[i] = 0;
         createCudaVars(&t1[i], &t2[i], &streams[i]);
+				sprintf(stream_name, "WORKER_%i", i);
+				NAME_STREAM(streams[i], stream_name);
 				live_stream[i] = 1;
         cudaEventCreate(&diff_t1[i]);
         cudaEventCreate(&diff_t2[i]);
@@ -947,6 +974,8 @@ if(errFile = fopen(error_filename, "w")){
           initializeParentOutputs(bfilename, hfilename);
       /*------------------------CHAIN INITIALIZATION---------------------------*/
           createCudaVars(&p1, &p2, &pStream);
+					sprintf(stream_name, "PARENT");
+					NAME_STREAM(pStream, stream_name);
 					live_pstream = 1;
           cudaEventCreate(&diff_p1);
           cudaEventCreate(&diff_p2);
@@ -2610,11 +2639,15 @@ __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE 
 	//__syncthreads();
 
 	// FIXME ONE OF THESE CAN BE REMOVED IF HASH UPDATE IS ONLY CALLED ONCE
+	// Try to use shared memory for intermediate value
+//	__shared__ BYTE local_mem_in[parent_block_size][64];
+//	__shared__ BYTE hash_t_i[NUM_THREADS][32];
   BYTE hash_t_i[32];
   BYTE hash_t_f[32];
   #pragma unroll 32
   for(int i = 0; i < 32; i++){
-    hash_t_i[i] = 0x00;
+//    hash_t_i[threadIdx.x][i] = 0x00;
+		hash_t_i[i] = 0x00;
     hash_t_f[i] = 0x00;
   }
 
@@ -2643,7 +2676,7 @@ __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE 
     sha256_final(&thread_ctx, hash_t_i);
 
     sha256_init(&thread_ctx);
-    sha256_update(&thread_ctx, hash_t_i, 32);
+		sha256_update(&thread_ctx, hash_t_i, 32);
     success = sha256_final_target(&thread_ctx, hash_t_f, target, compare);
 
     if(success == 0){
@@ -2678,27 +2711,28 @@ __global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks)
   __shared__ BYTE local_mem_in[PARENT_BLOCK_SIZE][64];
   __shared__ BYTE local_mem_out[PARENT_BLOCK_SIZE][32];
   int tree_size = pow(2.0, ceil(log2((double)buffer_blocks)));
+	volatile int idx = threadIdx.x; // REDUCES REGISTER USAGE FROM 57 TO 32
 
   // SET UP HASH TREE THREADS
-  if(threadIdx.x < buffer_blocks){
+  if(idx < buffer_blocks){
     //SET UP UNIQUE THREADS
     for(int i = 0; i < 32; i++){
-      local_mem_in[threadIdx.x][i] = pHash_d[threadIdx.x*32+i];
+      local_mem_in[idx][i] = pHash_d[idx*32+i];
     }
 
     // Calculate first hash, store in shared memory
     sha256_init(&ctx);
-    sha256_update(&ctx, local_mem_in[threadIdx.x], 32);
-    sha256_final(&ctx, local_mem_out[threadIdx.x]);
+    sha256_update(&ctx, local_mem_in[idx], 32);
+    sha256_final(&ctx, local_mem_out[idx]);
 
     #pragma unroll 32
     for(int i = 0; i < 32; i++){
-      local_mem_in[threadIdx.x][i] = local_mem_out[threadIdx.x][i];
+      local_mem_in[idx][i] = local_mem_out[idx][i];
     }
 
     sha256_init(&ctx);
-    sha256_update(&ctx, local_mem_in[threadIdx.x], 32);
-    sha256_final(&ctx, local_mem_out[threadIdx.x]);
+    sha256_update(&ctx, local_mem_in[idx], 32);
+    sha256_final(&ctx, local_mem_out[idx]);
 
     // Sequential hash reduction
     // First iteration 0 = 0|1	2=2|3 	4=4|5		6=6|7
@@ -2706,37 +2740,37 @@ __global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks)
     // Third iteration 0 = ((0|1)|(2|3))|((4|5)|(6|7)), etc...
     // Progressively loop to combine hashes
     for(int i = 2; i <= tree_size; i*=2){
-      if(threadIdx.x % i == 0){
+      if(idx % i == 0){
         int mid = i/2;
-        if(threadIdx.x + mid < buffer_blocks){
+        if(idx + mid < buffer_blocks){
           #pragma unroll 32
           for(int j = 0; j < 32; j++){
-            local_mem_in[threadIdx.x][j] = local_mem_out[threadIdx.x][j];
-            local_mem_in[threadIdx.x][32+j]= local_mem_out[threadIdx.x+mid][j];
+            local_mem_in[idx][j] = local_mem_out[idx][j];
+            local_mem_in[idx][32+j]= local_mem_out[idx+mid][j];
           }
         }else{ // HASH TOGETHER DUPLICATES FOR UNMATCHED BRANCHES
           #pragma unroll 32
           for(int j = 0; j < 32; j++){
-            local_mem_in[threadIdx.x][j] = local_mem_out[threadIdx.x][j];
-            local_mem_in[threadIdx.x][32+j]= local_mem_out[threadIdx.x][j];
+            local_mem_in[idx][j] = local_mem_out[idx][j];
+            local_mem_in[idx][32+j]= local_mem_out[idx][j];
           }
         }
         sha256_init(&ctx);
-        sha256_update(&ctx, local_mem_in[threadIdx.x], 64);
-        sha256_final(&ctx, local_mem_out[threadIdx.x]);
+        sha256_update(&ctx, local_mem_in[idx], 64);
+        sha256_final(&ctx, local_mem_out[idx]);
 
         #pragma unroll 32
         for(int j = 0; j < 32; j++){
-          local_mem_in[threadIdx.x][j] = local_mem_out[threadIdx.x][j];
+          local_mem_in[idx][j] = local_mem_out[idx][j];
         }
 
         sha256_init(&ctx);
-        sha256_update(&ctx, local_mem_in[threadIdx.x], 32);
-        sha256_final(&ctx, local_mem_out[threadIdx.x]);
+        sha256_update(&ctx, local_mem_in[idx], 32);
+        sha256_final(&ctx, local_mem_out[idx]);
       }
     }
     // All values coalesce into thread 0 shared memory space, and then get read back
-    if(threadIdx.x == 0){
+    if(idx == 0){
       for(int i = 0; i < 32; i++){
         pRoot_d[i] = local_mem_out[0][i];
       }
@@ -2834,9 +2868,12 @@ __device__ void printSplitBlock(BYTE * hash, BYTE * split){
 
 __device__ void sha256_transform(SHA256_CTX *ctx, const BYTE data[])
 {
-	WORD a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
+//	WORD a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
+	WORD a, b, c, d, e, f, g, h, i, j, t1, t2;
+	// FORCE MESSAGE SCHEDULE TO GLOBAL MEMORY, FREE UP 8+ REGISTERS
+	volatile WORD m[64];
 
-	for (i = 0, j = 0; i < 16; ++i, j += 4)
+	for (i = 0, j = 0; i < 16; ++i, j += 4) // TODO use accelerated addition, break into parts
 		m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);
 	for ( ; i < 64; ++i)
 		m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
@@ -2861,7 +2898,7 @@ __device__ void sha256_transform(SHA256_CTX *ctx, const BYTE data[])
 		b = a;
 		a = t1 + t2;
 	}
-	// UNSAFE ADDITION?
+
 	ctx->state[0] += a;
 	ctx->state[1] += b;
 	ctx->state[2] += c;
@@ -2947,8 +2984,8 @@ __device__ void sha256_final(SHA256_CTX *ctx, BYTE hash[])
 	}
 }
 
-
-__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], BYTE target[], int compare)
+// USE VOLATILE TARGET AND COMPARE TO FORCE GLOBAL STORAGE
+__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], volatile BYTE target[], volatile int compare)
 {
 	WORD i;
 
@@ -2980,25 +3017,6 @@ __device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], BYTE target[], 
 	ctx->data[56] = ctx->bitlen >> 56;
 	sha256_transform(ctx, ctx->data);
 
-	for (i = 0; i < 4; ++i) {
-		hash[i + 28] = (ctx->state[0] >> (i * 8)) & 0xff;
-		hash[i + 24] = (ctx->state[1] >> (i * 8)) & 0xff;
-		hash[i + 20] = (ctx->state[2] >> (i * 8)) & 0xff;
-		hash[i + 16] = (ctx->state[3] >> (i * 8)) & 0xff;
-		hash[i + 12] = (ctx->state[4] >> (i * 8)) & 0xff;
-		hash[i + 8]  = (ctx->state[5] >> (i * 8)) & 0xff;
-		hash[i + 4]  = (ctx->state[6] >> (i * 8)) & 0xff;
-		hash[i]      = (ctx->state[7] >> (i * 8)) & 0xff;
-	}
-
-	int success = 1;
-	for(int i = 0; i < compare; i++){
-		if(hash[i] > target[i]){
-			success = 0;
-		}
-	}
-
-
 	// Since this implementation uses little endian byte ordering and SHA uses big endian,
 	// reverse all the bytes when copying the final state to the output hash.
 	for (i = 0; i < 4; ++i) {
@@ -3010,6 +3028,15 @@ __device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], BYTE target[], 
 		hash[i + 20] = (ctx->state[5] >> (24 - i * 8)) & 0x000000ff;
 		hash[i + 24] = (ctx->state[6] >> (24 - i * 8)) & 0x000000ff;
 		hash[i + 28] = (ctx->state[7] >> (24 - i * 8)) & 0x000000ff;
+	}
+
+	int success = 1;
+
+	for(int i = 0; i < compare; i++){
+		if(hash[31 - i] > target[i]){
+			success = 0;
+			break;
+		}
 	}
 
 	// Store little endian ordering for bytewise comparison against the desired target
