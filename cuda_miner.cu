@@ -226,6 +226,8 @@
      │
      └───DEVICE_FUNCTIONS
          ├───printHash
+				 ├───printBlock
+				 ├───printSplitBlock
          ├───sha256_transform
          ├───sha256_init
          ├───sha256_update
@@ -432,7 +434,7 @@ int TEST_COUNT = 0;
 /****************************************************************************GLOBAL VARIABLES*******************************************************************************/
 /***************************************************************************************************************************************************************************/
 
-#define NUM_THREADS 256
+#define NUM_THREADS 1024
 #define MAX_BLOCKS 16
 #define PARENT_BLOCK_SIZE 16
 #define DIFFICULTY_LIMIT 32
@@ -442,7 +444,7 @@ int TEST_COUNT = 0;
 //#define TARGET_DIFFICULTY 2
 
 //#define TARGET_BLOCKS DIFFICULTY_LIMIT*TARGET_DIFFICULTY
-#define TARGET_BLOCKS 30
+#define TARGET_BLOCKS 32
 
 // INPUTS GENERATED = LOOPS * NUM_THREADS * NUM_BLOCKS
 #define INPUT_LOOPS 25
@@ -605,6 +607,8 @@ __global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks)
 /************************************                                                                                                   ************************************/
 /***************************************************************************************************************************************************************************/
 __device__ void printHash(BYTE * hash);
+__device__ void printBlock(BYTE * hash);
+__device__ void printSplitBlock(BYTE * hash, BYTE * split);
 
 /*-----------------------------------------------------------------------------SHA256 FUNCTIONS----------------------------------------------------------------------------*/
 
@@ -1501,6 +1505,15 @@ __host__ void hostFunctionalTest(void){
 	PUSH_DOMAIN(handle, "80B MINING TEST", 4, 4);
 	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
 	strcpy((char*)correct_str, "265a66f42191c9f6b26a1b9d4609d76a0b5fdacf9b82b6de8a3b3e904f000000");
+	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 1, &logStr);
+	sprintf(logMsg, "DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+	strcat(logResult, logMsg);
+	POP_DOMAIN(handle);
+
+	// VERIFY MINING TEST
+	PUSH_DOMAIN(handle, "VERIFY MINING TEST", 5, 5);
+	strcpy((char*)test_str, "0100000065119c7894e4d7fcf6041d7866b6e7b53fdb44dacd048b2ae72db9339a000000f57b5290c9f21cb3ca9428a2c3efb60a37e1e17ae6cc4673db36b16848ef73d15c3312041d00ffff034b631f");
+	strcpy((char*)correct_str, "5417d0cfb72640adf41bd7b64a89852692a50d7bc1734aa0c0b580ac6b000000");
 	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 1, &logStr);
 	sprintf(logMsg, "DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 	strcat(logResult, logMsg);
@@ -2569,12 +2582,34 @@ __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE 
   int max_iteration = 0xffffffff / inc_size;
   nonce += idx;
 
-  BYTE threadBlock[80];
-  #pragma unroll 80
-  for(int i = 0; i < 80; i++){
-    threadBlock[i] = block_d[i];
-  }
+	// THREADS SHARE FIRST 64 BYTES, COPY FOR EACH BLOCK
+	__shared__ BYTE baseBlock[64];
+	if(threadIdx.x < 64){
+		#pragma unroll 64
+		for(int i = 0; i < 64; i++){
+			baseBlock[threadIdx.x] = block_d[threadIdx.x];
+		}
+	}
 
+	// EACH THREAD HAS ITS OWN VARIABLE FOR TOP 16 BYTES
+	BYTE uniqueBlock[16];
+	#pragma unroll 16
+	for(int i = 0; i < 16; i++){
+		uniqueBlock[i] = block_d[i+64];
+	}
+/*
+	if(idx == 0){
+			printf("COMPARE BASEBLOCK TO ORIGINAL: \n");
+			printf("ORIGINAL: \n");
+			printBlock(block_d);
+			printf("SPLIT BLOCK: \n");
+			printSplitBlock(baseBlock, uniqueBlock);
+	}
+*/
+	// SYNCHRONIZE TO ENSURE SHARED MEMORY IS READY
+	//__syncthreads();
+
+	// FIXME ONE OF THESE CAN BE REMOVED IF HASH UPDATE IS ONLY CALLED ONCE
   BYTE hash_t_i[32];
   BYTE hash_t_f[32];
   #pragma unroll 32
@@ -2588,23 +2623,23 @@ __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE 
       iteration++;
     }else{ // UPDATE TIME
       iteration = 0;
-      threadBlock[68] = time_d[0];
-      threadBlock[69] = time_d[1];
-      threadBlock[70] = time_d[2];
-      threadBlock[71] = time_d[3];
-      if(idx == 0){
+      uniqueBlock[4] = time_d[0];
+      uniqueBlock[5] = time_d[1];
+      uniqueBlock[6] = time_d[2];
+      uniqueBlock[7] = time_d[3];
+			if(idx == 0){
         printf("NEW TIME %02x%02x%02x%02x\n\n", time_d[0], time_d[1], time_d[2], time_d[3]);
       }
     }
 
-    threadBlock[76] = (BYTE)(nonce >> 24) & 0xFF;
-    threadBlock[77] = (BYTE)(nonce >> 16) & 0xFF;
-    threadBlock[78] = (BYTE)(nonce >> 8) & 0xFF;
-    threadBlock[79] = (BYTE)(nonce & 0xFF);
+    uniqueBlock[12] = (BYTE)(nonce >> 24) & 0xFF;
+    uniqueBlock[13] = (BYTE)(nonce >> 16) & 0xFF;
+    uniqueBlock[14] = (BYTE)(nonce >> 8) & 0xFF;
+    uniqueBlock[15] = (BYTE)(nonce & 0xFF);
 
     sha256_init(&thread_ctx);
-    sha256_update(&thread_ctx, threadBlock, 64);
-    sha256_update(&thread_ctx, &(threadBlock[64]), 16);
+    sha256_update(&thread_ctx, baseBlock, 64);
+    sha256_update(&thread_ctx, uniqueBlock, 16);
     sha256_final(&thread_ctx, hash_t_i);
 
     sha256_init(&thread_ctx);
@@ -2615,18 +2650,18 @@ __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE 
       nonce += inc_size;
     }else{
       flag_d[0] = 1;
-      nonce_f[0] = threadBlock[76];
-      nonce_f[1] = threadBlock[77];
-      nonce_f[2] = threadBlock[78];
-      nonce_f[3] = threadBlock[79];
-      block_d[76] = threadBlock[76];
-      block_d[77] = threadBlock[77];
-      block_d[78] = threadBlock[78];
-      block_d[79] = threadBlock[79];
+      nonce_f[0] = uniqueBlock[12];
+      nonce_f[1] = uniqueBlock[13];
+      nonce_f[2] = uniqueBlock[14];
+      nonce_f[3] = uniqueBlock[15];
+      block_d[76] = uniqueBlock[12];
+      block_d[77] = uniqueBlock[13];
+      block_d[78] = uniqueBlock[14];
+      block_d[79] = uniqueBlock[15];
 
-      #pragma unroll 80
-      for(int i = 0; i < 80; i++){
-        block_d[i] = threadBlock[i];
+      #pragma unroll 16
+      for(int i = 0; i < 16; i++){
+        block_d[i+64] = uniqueBlock[i];
       }
       #pragma unroll 32
       for(int i = 0; i < 32; i++){
@@ -2736,6 +2771,62 @@ __device__ void printHash(BYTE * hash){
   printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x \n", hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], hash[8], hash[9],\
   hash[10], hash[11], hash[12], hash[13], hash[14], hash[15], hash[16], hash[17], hash[18], hash[19],\
   hash[20], hash[21], hash[22], hash[23], hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31]);
+}
+__device__ void printBlock(BYTE * hash){
+/*
+  printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x \n\
+	", hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], hash[8], hash[9],\
+  hash[10], hash[11], hash[12], hash[13], hash[14], hash[15], hash[16], hash[17], hash[18], hash[19],\
+  hash[20], hash[21], hash[22], hash[23], hash[24], hash[25], hash[26], hash[27], hash[28], hash[29],\
+	hash[30], hash[31], hash[32], hash[33], hash[34], hash[35], hash[36], hash[37], hash[38], hash[39],\
+	hash[40], hash[41], hash[42], hash[43], hash[44], hash[45], hash[46], hash[47], hash[48], hash[49],\
+	hash[50], hash[51], hash[52], hash[53], hash[54], hash[55], hash[56], hash[57], hash[58], hash[59],\
+	hash[60], hash[61], hash[62], hash[63], hash[64], hash[65], hash[66], hash[67], hash[68], hash[69],\
+	hash[70], hash[71], hash[72], hash[73], hash[74], hash[75], hash[76], hash[77], hash[78], hash[79]);
+*/
+	printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n", \
+	hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], hash[8], hash[9],\
+  hash[10], hash[11], hash[12], hash[13], hash[14], hash[15], hash[16], hash[17], hash[18], hash[19],\
+  hash[20], hash[21], hash[22], hash[23], hash[24], hash[25], hash[26], hash[27], hash[28], hash[29],\
+	hash[30], hash[31]);
+
+	printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n", \
+	hash[32], hash[33], hash[34], hash[35], hash[36], hash[37], hash[38], hash[39],\
+	hash[40], hash[41], hash[42], hash[43], hash[44], hash[45], hash[46], hash[47], hash[48], hash[49],\
+	hash[50], hash[51], hash[52], hash[53], hash[54], hash[55], hash[56], hash[57], hash[58], hash[59],\
+	hash[60], hash[61], hash[62], hash[63]);
+
+	printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n", \
+	hash[64], hash[65], hash[66], hash[67], hash[68], hash[69],\
+	hash[70], hash[71], hash[72], hash[73], hash[74], hash[75], hash[76], hash[77], hash[78], hash[79]);
+}
+
+__device__ void printSplitBlock(BYTE * hash, BYTE * split){
+	/*
+  printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x \n\
+	", hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], hash[8], hash[9],\
+  hash[10], hash[11], hash[12], hash[13], hash[14], hash[15], hash[16], hash[17], hash[18], hash[19],\
+  hash[20], hash[21], hash[22], hash[23], hash[24], hash[25], hash[26], hash[27], hash[28], hash[29],\
+	hash[30], hash[31], hash[32], hash[33], hash[34], hash[35], hash[36], hash[37], hash[38], hash[39],\
+	hash[40], hash[41], hash[42], hash[43], hash[44], hash[45], hash[46], hash[47], hash[48], hash[49],\
+	hash[50], hash[51], hash[52], hash[53], hash[54], hash[55], hash[56], hash[57], hash[58], hash[59],\
+	hash[60], hash[61], hash[62], hash[63],\
+	split[0], split[1], split[2], split[3], split[4], split[5], split[6], split[7], split[8], split[9], split[10], split[11], split[12], split[13], split[14], split[15]);
+*/
+	printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n", \
+	hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], hash[8], hash[9],\
+	hash[10], hash[11], hash[12], hash[13], hash[14], hash[15], hash[16], hash[17], hash[18], hash[19],\
+	hash[20], hash[21], hash[22], hash[23], hash[24], hash[25], hash[26], hash[27], hash[28], hash[29],\
+	hash[30], hash[31]);
+
+	printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n", \
+	hash[32], hash[33], hash[34], hash[35], hash[36], hash[37], hash[38], hash[39],\
+	hash[40], hash[41], hash[42], hash[43], hash[44], hash[45], hash[46], hash[47], hash[48], hash[49],\
+	hash[50], hash[51], hash[52], hash[53], hash[54], hash[55], hash[56], hash[57], hash[58], hash[59],\
+	hash[60], hash[61], hash[62], hash[63]);
+
+	printf("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n", \
+	split[0], split[1], split[2], split[3], split[4], split[5], split[6], split[7], split[8], split[9], split[10], split[11], split[12], split[13], split[14], split[15]);
 }
 
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
