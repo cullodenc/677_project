@@ -263,6 +263,13 @@
 #include <memory.h>
 
 #include <cuda.h>
+// INCLUDE PROFILER LIBRARIES IF USE_NVTX IS ENABLED IN NVCC COMPILE
+#ifdef USE_NVTX
+#include <cuda_profiler_api.h>
+#include <nvToolsExt.h>
+#include <nvToolsExtCuda.h>
+#include <nvToolsExtCudaRt.h>
+#endif
 
 /***************************************************************************************************************************************************************************/
 /*****************************************************************************TYPE DEFINITIONS******************************************************************************/
@@ -311,6 +318,88 @@ __constant__ WORD k[64] = { // SHA256 constants
 	0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
 
+/***************************************************************************************************************************************************************************/
+/**************************************************************************PROFILING DEFINITIONS****************************************************************************/
+/***************************************************************************************************************************************************************************/
+
+int PROFILER = 0;         // PROFILER SWITCH, DISABLED BY DEFAULT
+int TEST_COUNT = 0;
+//#define USE_NVTX 1
+
+// INCLUDE PROFILER FUNCTIONS IF USE_NVTX IS ENABLED IN NVCC COMPILE
+#ifdef USE_NVTX
+	// PROFILER COLOR DEFINITIONS
+	const uint32_t colors[] = { 0xff00ff00, 0xff0000ff, 0xffffff00, 0xffff00ff, 0xff00ffff, 0xffff0000, 0xffffffff };
+	const int num_colors = sizeof(colors)/sizeof(uint32_t);
+
+	// TEST TO SEE IF PROFILING MACRO WAS PASSED IN
+	#define PRINT_MACRO printf("MACRO PASSED SUCCESSFULLY!!\n\n")
+
+	#define NAME_STREAM(stream, name) { \
+		if(PROFILER == 1){ \
+			nvtxNameCuStreamA(stream, name); \
+		}\
+	}
+
+	// DEFAULT RANGE MANAGEMENT FUNCTIONS
+	#define PUSH_RANGE(name,cid) { \
+		if(PROFILER == 1){ \
+			int color_id = cid; \
+			color_id = color_id%num_colors;\
+			nvtxEventAttributes_t eventAttrib = {0}; \
+			eventAttrib.version = NVTX_VERSION; \
+			eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+			eventAttrib.colorType = NVTX_COLOR_ARGB; \
+			eventAttrib.color = colors[color_id]; \
+			eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+			eventAttrib.message.ascii = name; \
+			nvtxRangePushEx(&eventAttrib); \
+		}}
+
+	#define POP_RANGE if(PROFILER == 1){nvtxRangePop();}
+
+	// DOMAIN MANAGEMENT FUNCTIONS
+	#define DOMAIN_HANDLE nvtxDomainHandle_t
+
+	#define DOMAIN_CREATE(handle, name){ \
+			if(PROFILER == 1){ \
+				handle = nvtxDomainCreateA(name); \
+	}}
+
+	#define DOMAIN_DESTROY(handle){ \
+			if(PROFILER == 1){ \
+				nvtxDomainDestroy(handle); \
+	}}
+
+	#define PUSH_DOMAIN(handle, name, load, cid) { \
+		if(PROFILER == 1){ \
+			int color_id = cid; \
+			color_id = color_id%num_colors;\
+			nvtxEventAttributes_t eventAttrib = {0}; \
+			eventAttrib.version = NVTX_VERSION; \
+			eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+			eventAttrib.colorType = NVTX_COLOR_ARGB; \
+			eventAttrib.color = colors[color_id]; \
+			eventAttrib.payloadType = NVTX_PAYLOAD_TYPE_UNSIGNED_INT64; \
+			eventAttrib.payload.llValue = load; \
+			eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+			eventAttrib.message.ascii = name; \
+			nvtxDomainRangePushEx(handle, &eventAttrib); \
+		}}
+
+	#define POP_DOMAIN(handle) if(PROFILER == 1){nvtxDomainRangePop(handle);}
+
+#else // EMPTY FUNCTIONS WHEN NVTX IS DISABLED OR UNAVAILABLE
+	#define PRINT_MACRO printf("MACRO WAS NOT PASSED!!\n\n")
+	#define NAME_STREAM(stream, name)
+	#define PUSH_RANGE(name,cid)
+	#define POP_RANGE
+	#define DOMAIN_HANDLE int
+	#define DOMAIN_CREATE(handle, name)
+	#define DOMAIN_DESTROY(handle)
+	#define PUSH_DOMAIN(handle, name, load, cid)
+	#define POP_DOMAIN(handle)
+#endif
 
 /***************************************************************************************************************************************************************************/
 /***************************************************************************************************************************************************************************/
@@ -359,12 +448,11 @@ __constant__ WORD k[64] = { // SHA256 constants
 #define INPUT_LOOPS 25
 
 // Exponentially reduce computation time, 0 is normal, positive values up to 3 drastically reduce difficulty
-#define DIFF_REDUCE 1
+int DIFF_REDUCE = 1;
 
 // INITIALIZE DEFAULT GLOBAL VARIABLES FOR COMMAND LINE OPTIONS
 // INFORMATIVE COMMAND OPTIONS
 int DEBUG = 0;            // DEBUG DISABLED BY DEFAULT
-int PROFILER = 0;         // PROFILER SWITCH, DISABLED BY DEFAULT
 int MINING_PROGRESS = 0;  // MINING PROGRESS INDICATOR DISABLED BY DEFAULT (ONLY ENABLE IF NOT SAVING CONSOLE OUTPUT TO A FILE, OTHERWISE THE STATUS WILL OVERTAKE THE WRITTEN OUTPUT)
 
 // ARCHITECTURE COMMAND OPTIONS
@@ -537,6 +625,7 @@ __device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], BYTE target[], 
 // HOST INITIALIZATION, BEGIN WITH PARSING COMMAND LINE ARGUMENTS
 int main(int argc, char *argv[]){
   // IMPROVED COMMAND LINE ARGUMENT PARSING
+	PRINT_MACRO;
   if(argc == 1){ // DEFAULT MODE SELECTED, PRINT OUTPUT SPECIFYING OPTIONS WITH DEFAULTS
     printf("WARNING: NO OPTIONS SELECTED, RUNNING DEFAULT IMPLEMENTATION\n\
 BASIC INPUT OPTIONS: \n\n\
@@ -585,6 +674,9 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
       else if(strcmp(arg_in, "--profile") == 0){  // PROFILER OPTION
         PROFILER = 1;
         printf("PROFILER FUNCTIONS ENABLED\n");
+				// TODO ADD NVTX TO LABEL STREAMS AND ADD EVENTS (SEE NVIDIA PROFILER GUIDE FOR MORE DETAILS)
+				// TODO PRIOR TO EXECUTION, SET DIFF_REDUCE TO 2 OR MORE TO TRY REDUCE PROFILING OVERHEAD
+				DIFF_REDUCE = 2;
       }
       else if(strcmp(arg_in, "--indicator") == 0){  // MINING INDICATOR OPTION
         MINING_PROGRESS = 1;
@@ -676,6 +768,7 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
     if(dry_run == 0){
       // TODO CHECK FOR PROFILER ENABLED, INCLUDE LOGGING OF ENABLED SETTINGS
       hostCoreProcess(NUM_WORKERS, MULTILEVEL);
+			cudaDeviceReset();  //
     } else{
       printLog("MINING DISABLED FOR DRY RUN TESTING. NOW EXITING...\n\n");
     }
@@ -1361,41 +1454,60 @@ __host__ void hostFunctionalTest(void){
   logStr = (char*)malloc(sizeof(char) * logSize);
 	strcpy(logResult, "\n****************************HASHING FUNCTIONAL TESTS****************************\n");
 
+	// INITIALIZE TEST PROFILING DOMAIN
+	#ifdef USE_NVTX
+		DOMAIN_HANDLE handle;
+	#endif
+	DOMAIN_CREATE(handle, "FUNCTIONAL TESTS");
+
 	// HASH TESTS
 	// Simple input 'abcd'
+	PUSH_DOMAIN(handle, "SIMPLE TEST", 0, 0);
 	strcpy((char*)test_str, "61626364");
 	strcpy((char*)correct_str, "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589");
 	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 4, 0, &logStr);
 	sprintf(logMsg, "BASIC TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 	strcat(logResult, logMsg);
+	POP_DOMAIN(handle);
 
 	// 32 BYTE MESSAGE
+	PUSH_DOMAIN(handle, "32B TEST", 1, 1);
 	strcpy((char*)test_str, "1979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f56");
 	strcpy((char*)correct_str, "928e8c1f694fc888316690b3c05573c226785344941bed6016909aefb07ecb6d");
 	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 32, 0, &logStr);
 	sprintf(logMsg, "32-BYTE TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 	strcat(logResult, logMsg);
+	POP_DOMAIN(handle);
 
 	// 64 BYTE MESSAGE
+	PUSH_DOMAIN(handle, "64B TEST", 2, 2);
 	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e");
 	strcpy((char*)correct_str, "8e8ce198ef7f22243d9ed05b336b49a8051003a45c5e746ae2d7965d9d93b072");
 	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 64, 0, &logStr);
 	sprintf(logMsg, "64-BYTE TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 	strcat(logResult, logMsg);
+	POP_DOMAIN(handle);
 
 	// 80 BYTE MESSAGE
+	PUSH_DOMAIN(handle, "80B TEST", 3, 3);
 	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
 	strcpy((char*)correct_str, "c45337946ef4402f6bf49e03039ca5d1dcf5edb5f885110fdb3f2e690d2ccb35");
 	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0, &logStr);
 	sprintf(logMsg, "BLOCK TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 	strcat(logResult, logMsg);
+	POP_DOMAIN(handle);
 
 	// 80 BYTE MESSAGE (DOUBLE HASH)
+	PUSH_DOMAIN(handle, "80B MINING TEST", 4, 4);
 	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
 	strcpy((char*)correct_str, "265a66f42191c9f6b26a1b9d4609d76a0b5fdacf9b82b6de8a3b3e904f000000");
 	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 1, &logStr);
 	sprintf(logMsg, "DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 	strcat(logResult, logMsg);
+	POP_DOMAIN(handle);
+
+	// DESTROY FUNCTIONAL TEST DOMAIN
+	DOMAIN_DESTROY(handle);
 
 	strcat(logResult, "********************************************************************************\n\n");
   printLog(logResult);
@@ -1412,25 +1524,34 @@ __host__ void testHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE 
 	BYTE result_str[65];
 	BYTE correct_hex[32];
 	int hash_match;
+	cudaStream_t test_stream;
+	cudaStreamCreate(&test_stream);
+
+	// ADD NAME TO STREAM
+	char stream_name[50];
+	sprintf(stream_name, "TEST STREAM %i", TEST_COUNT);
+	TEST_COUNT++;
+	NAME_STREAM(test_stream, stream_name);
 
 	memset(test_h, 0, BLOCK_SIZE);
-	cudaMemcpy(result_d, test_h, HASH_SIZE, cudaMemcpyHostToDevice);
+	cudaMemcpyAsync(result_d, test_h, HASH_SIZE, cudaMemcpyHostToDevice, test_stream);
 	encodeHex(test_str, test_h, test_size*2);
 
-	cudaMemcpy(test_d, test_h, BLOCK_SIZE, cudaMemcpyHostToDevice);
-	hashTestKernel<<<1, 1>>>(test_d, result_d, test_size);
-	cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost);
+	cudaMemcpyAsync(test_d, test_h, BLOCK_SIZE, cudaMemcpyHostToDevice, test_stream);
+	hashTestKernel<<<1, 1, 0, test_stream>>>(test_d, result_d, test_size);
+	cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost, test_stream);
 	cudaDeviceSynchronize();
 
 	if(double_hash == 1){
-		cudaMemcpy(test_d, result_d, HASH_SIZE, cudaMemcpyHostToDevice);
-		hashTestKernel<<<1, 1>>>(test_d, result_d, 32);
-		cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost);
+		cudaMemcpyAsync(test_d, result_d, HASH_SIZE, cudaMemcpyHostToDevice, test_stream);
+		hashTestKernel<<<1, 1, 0, test_stream>>>(test_d, result_d, 32);
+		cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost, test_stream);
 	}
 	cudaDeviceSynchronize();
-	decodeHex(result_h, result_str, 32);
+	cudaStreamDestroy(test_stream);
 
 	// Compare results
+	decodeHex(result_h, result_str, 32);
 	encodeHex(correct_str, correct_hex, 64);
 	hash_match = strcmp((char*)result_str, (char*)correct_str);
 	if(hash_match == 0){
@@ -1452,6 +1573,15 @@ __host__ void hostBenchmarkTest(int num_workers){
 
   createCudaVars(&bench_s, &bench_f, &bench_stream);
 
+	// INITIALIZE BENCHMARK PROFILING DOMAIN
+	char stream_name[50];
+	sprintf(stream_name, "BENCHMARK STREAM");
+	NAME_STREAM(bench_stream, stream_name);
+	#ifdef USE_NVTX
+		DOMAIN_HANDLE handle;
+	#endif
+	DOMAIN_CREATE(handle, "BENCHMARK TEST");
+	PUSH_DOMAIN(handle, "BENCHMARK TEST", 0, 0);
 
   // Allocate test block memory
   test_block_h = (BYTE *)malloc(BLOCK_SIZE);
@@ -1469,6 +1599,7 @@ __host__ void hostBenchmarkTest(int num_workers){
   cudaEventRecord(bench_f, bench_stream);
 
   cudaDeviceSynchronize();
+	POP_DOMAIN(handle);
 
   cudaEventElapsedTime(&bench_time, bench_s, bench_f);
 
@@ -1488,6 +1619,9 @@ __host__ void hostBenchmarkTest(int num_workers){
   /**********************************************************************************************/\n\
   ", num_workers, bench_time, worker_time, block_time, thread_time);
   printLog(logResult);
+
+	// DESTROY BENCHMARK TEST DOMAIN
+	DOMAIN_DESTROY(handle);
 
   destroyCudaVars(&bench_s, &bench_f, &bench_stream);
   free(test_block_h);
@@ -1760,8 +1894,11 @@ __host__ void updateDifficulty(BYTE * block_h, int diff_level){
 }
 // UPDATE THE CURRENT TIME ON DEVICE IN CASE OF NONCE OVERFLOW
 __host__ void updateTime(cudaStream_t * tStream, BYTE * time_h, BYTE * time_d){
+	BYTE old_time = time_h[3];
   getTime(time_h);
-  cudaMemcpyAsync(time_d, time_h, 4*sizeof(BYTE), cudaMemcpyHostToDevice, *tStream);
+	if(old_time != time_h[3]){ // Time has changed, update device memory
+  	cudaMemcpyAsync(time_d, time_h, 4*sizeof(BYTE), cudaMemcpyHostToDevice, *tStream);
+	}
 }
 
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
