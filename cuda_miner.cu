@@ -139,7 +139,9 @@
      │   │   ├───hostDeviceQuery
      │   │   ├───hostFunctionalTest
      │   │   ├───testHash
+		 │   │   ├───testMiningHash
      │   │   ├───hostBenchmarkTest
+		 │   │   ├───miningBenchmarkKernel
      FIXME
      │   ├───MEMORY
      │   │   ├───ALLOCATION
@@ -177,11 +179,13 @@
      │   │   │
      │   │   ├───GETTERS
      │   │   │   ├───getTime
-     │   │   │   └───getDifficulty
+     │   │   │   ├───getDifficulty
+		 │   │       └───getMiningDifficulty
      │   │   │
      │   │   └───CALCULATIONS
      │   │       ├───calculateDifficulty
-     │   │       └───calculateTarget
+     │   │       ├───calculateTarget
+		 │   │       └───calculateMiningTarget
      │   │
      │   ├───KERNELS
      │   │   ├───genHashKernel
@@ -232,8 +236,12 @@
          ├───sha256_init
          ├───sha256_update
          ├───sha256_final
-         └───sha256_final_target
-
+         ├───sha256_final_target
+				 ├───sha256_mining_transform
+				 ├───sha256_mining_transform_short
+				 ├───scheduleExpansion
+				 ├───scheduleExpansion_short
+				 └───sha256_blockHash_TEST
 */
 
 
@@ -300,13 +308,18 @@ typedef struct {
 #define SIG0(x) (ROTRIGHT(x,7) ^ ROTRIGHT(x,18) ^ ((x) >> 3))
 #define SIG1(x) (ROTRIGHT(x,17) ^ ROTRIGHT(x,19) ^ ((x) >> 10))
 
+#define SHFTCMP(x, y, n) (((x >> n) & 0x000000ff) <= ((y >> n) & 0x000000ff))
+#define COMPARE(x, y) (SHFTCMP(x,y,24) & SHFTCMP(x,y,16) & SHFTCMP(x,y,8) & SHFTCMP(x,y,0))
+
 /***************************************************************************************************************************************************************************/
 /**************************************************************************CONSTANT DEFINITIONS*****************************************************************************/
 /***************************************************************************************************************************************************************************/
 #define SHA256_BLOCK_SIZE 32            // SHA256 outputs a 32 byte digest
 #define BLOCK_SIZE sizeof(BYTE)*80
+#define BASE_SIZE sizeof(BYTE)*64
 #define HASH_SIZE sizeof(BYTE)*32
 #define NONCE_SIZE sizeof(BYTE)*4
+#define TARGET_SIZE sizeof(WORD)*8
 
 
 __constant__ WORD k[64] = { // SHA256 constants
@@ -319,6 +332,38 @@ __constant__ WORD k[64] = { // SHA256 constants
 	0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
 	0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
+
+__constant__ WORD i_state[8] = {
+	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+	0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+};
+
+// PRECOMPUTED SCHEDULE PADDING VALUES FOR 80 BYTE BLOCK HASH
+__constant__ WORD msgSchedule_80B[16] = {
+	0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	0x80000000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00000000, 0x00000280
+};
+
+// PRECOMPUTED SCHEDULE PADDING VALUES FOR 32 BYTE BLOCK HASH
+__constant__ WORD msgSchedule_32B[16] = {
+	0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	0x80000000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00000000, 0x00000100
+};
+
+
+
+/*----------------------------------------------------------------------------CONSTANT SYMBOLS-----------------------------------------------------------------------------*/
+// TEST CONSTANTS
+//__constant__ BYTE test_unique_c[16];
+__constant__ WORD test_basemsg_c[16];
+__constant__ WORD test_target_c[8];
+
+
+
 
 /***************************************************************************************************************************************************************************/
 /**************************************************************************PROFILING DEFINITIONS****************************************************************************/
@@ -488,7 +533,9 @@ __host__ void hostDeviceQuery(void);
 /*-----------------------------------------------------------------------------TEST FUNCTIONS------------------------------------------------------------------------------*/
 __host__ void hostFunctionalTest(void);
 __host__ void testHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE * test_d, BYTE * result_h, BYTE * result_d, int test_size, int double_hash, char ** logStr);
+__host__ void testMiningHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE * test_d, BYTE * result_h, BYTE * result_d, int test_size, BYTE diff_pow, char ** logStr);
 __host__ void hostBenchmarkTest(int num_workers);
+__host__ void miningBenchmarkTest(int num_workers);
 
 // TODO ADD TESTING CORES HERE
 /*-----------------------------------------------------------------------------------||------------------------------------------------------------------------------------*/
@@ -529,9 +576,12 @@ __host__ void updateTime(cudaStream_t * tStream, BYTE * time_h, BYTE * time_d);
 /*-----------------------------------------------------------------------------MINING GETTERS------------------------------------------------------------------------------*/
 __host__ void getTime(BYTE * byte_time);
 __host__ void getDifficulty(BYTE * block_h, BYTE ** target, int * target_length, double * difficulty, int worker_num);
+// VARIANT TO GET TARGET AS WORDS INSTEAD OF BYTES, REVERSE BYTE ORDER
+__host__ void getMiningDifficulty(BYTE * block_h, WORD ** target, int * target_length, double * difficulty, int worker_num);
 /*---------------------------------------------------------------------------MINING CALCULATIONS---------------------------------------------------------------------------*/
 __host__ double calculateDifficulty(BYTE * bits);
 __host__ int calculateTarget(BYTE * bits, BYTE * target);
+__host__ int calculateMiningTarget(BYTE * bits, BYTE * target_bytes, WORD * target);
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 /***************************************************************************************************************************************************************************/
@@ -592,7 +642,9 @@ __host__ void printOutputFile(char * outFileName, BYTE * block_h, BYTE * hash_f,
 __global__ void cudaTest(void);
 // FIXME ADD MORE TEST KERNELS HERE
 __global__ void benchmarkKernel(BYTE * block_d);
+__global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d);
 __global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size);
+__global__ void hashTestMiningKernel(BYTE * test_block, BYTE * result_block, int * success);
 
 /*-----------------------------------------------------------------------------MINING FUNCTIONS----------------------------------------------------------------------------*/
 __global__ void genTestHashes(BYTE * hash_df, BYTE * seed, int num_blocks);
@@ -619,7 +671,16 @@ __device__ void sha256_transform(SHA256_CTX *ctx, const BYTE data[]);
 __device__ void sha256_init(SHA256_CTX *ctx);
 __device__ void sha256_update(SHA256_CTX *ctx, const BYTE data[], size_t len);
 __device__ void sha256_final(SHA256_CTX *ctx, BYTE hash[]);
-__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], volatile BYTE target[], volatile int compare);
+__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], const BYTE target[], const int compare);
+
+/*-----------------------------------------------------------------------OPTIMIZED HASHING FUNCTIONS-----------------------------------------------------------------------*/
+__device__ void sha256_mining_transform(WORD state[], WORD m[]);
+__device__ void sha256_mining_transform_short(WORD state[], WORD m[]);
+
+__device__ __inline__ void scheduleExpansion(WORD m[]);
+__device__ __inline__ void scheduleExpansion_short( WORD m[]);
+
+__device__ int sha256_blockHash_TEST(BYTE uniquedata[], BYTE hash[]);
 
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -712,7 +773,7 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
               printf("NUMBER OF WORKERS SET TO %i\n", NUM_WORKERS);
               i++;
             } else{
-              printf("%s   fatal:  OPTION '-w' EXPECTS A POSITIVE INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+              printf("%s   fatal:  OPTION '-w' EXPECTS A POSITIVE NON-ZERO INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
               err_flag = 1;
               break;
             }
@@ -729,12 +790,29 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 							printf("TARGET DIFFICULTY SET TO %i, MINING GOAL OF %i TOTAL BLOCKS\n", TARGET_DIFFICULTY, TARGET_BLOCKS);
 							i++;
 						} else{
-							printf("%s   fatal:  OPTION '-t' EXPECTS A POSITIVE INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							printf("%s   fatal:  OPTION '-t' EXPECTS A POSITIVE NON-ZERO INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
 							err_flag = 1;
 							break;
 						}
 					} else{
 						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-t'\n\n", argv[0]);
+						err_flag = 1;
+						break;
+					}
+			}
+			else if(strcmp(arg_in, "-diff") == 0){
+					if(i+1 < argc){
+						if(atoi(argv[i+1]) >= 0){
+							DIFF_REDUCE = atoi(argv[i+1]);
+							printf("STARTING DIFFICULTY SET TO %i\n", DIFF_REDUCE);
+							i++;
+						} else{
+							printf("%s   fatal:  OPTION '-diff' EXPECTS A POSITIVE INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							err_flag = 1;
+							break;
+						}
+					} else{
+						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-diff'\n\n", argv[0]);
 						err_flag = 1;
 						break;
 					}
@@ -770,8 +848,9 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 \t --indicator \t\t ENABLE PROGRESS INDICATOR (DEFAULT: DISABLED)\n\t\t\t\t\t [!!WARNING!!-DO NOT USE INDICATOR IF WRITING CONSOLE OUTPUT TO A FILE]\n\n\
  DESIGN SPECIFIERS\n\n\
 \t --multi \t\t MULTILEVEL ARCHITECTURE (DEFAULT: DISABLED)\n\
-\t  -w #   \t\t NUMBER OF WORKER CHAINS AS A POSITIVE INTEGER (DEFAULT: 1)\n\
-\t  -t #   \t\t THE TARGET DIFFICULTY AS A POSITIVE INTEGER (DEFAULT: 1)\n", argv[0]);
+\t  -w #   \t\t NUMBER OF WORKER CHAINS AS A POSITIVE NON-ZERO INTEGER (DEFAULT: 1)\n\
+\t  -t #   \t\t THE TARGET DIFFICULTY AS A POSITIVE NON-ZERO INTEGER (DEFAULT: 1)\n\
+\t  -diff #   \t\t STARTING DIFFICULTY REDUCTION AS A POSITIVE INTEGER [0 NORMAL, 3 MAXIMUM] (DEFAULT: 1)\n", argv[0]);
   }
   // RUN THE SELECTED IMPLEMENTATION(S)
   else{
@@ -788,6 +867,8 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
     if(bench_flag == 1){
       printf("BENCHMARK TESTING SELECTED!!!!!\n");
       hostBenchmarkTest(NUM_WORKERS);
+			printf("\nBLOCK MINING BENCHMARK TESTING:\n");
+			miningBenchmarkTest(NUM_WORKERS);
     }
     // START MINING IF DRY RUN IS NOT SELECTED
     if(dry_run == 0){
@@ -1468,12 +1549,15 @@ __host__ void hostFunctionalTest(void){
   BYTE * test_d;
 	BYTE * result_h;
 	BYTE * result_d;
+	// STORE DIFF_REDUCE TO BE SET LATER
+	int temp_reduce = DIFF_REDUCE;
+	DIFF_REDUCE = 0;
 
 	BYTE test_str[161];
 	BYTE correct_str[65];
 
 	int logSize = 500;
-  char logResult[2000];
+  char logResult[4000];
 	char * logStr;
 	char logMsg[logSize];
 
@@ -1496,56 +1580,102 @@ __host__ void hostFunctionalTest(void){
 	// HASH TESTS
 	// Simple input 'abcd'
 	PUSH_DOMAIN(handle, "SIMPLE TEST", 0, 0);
-	strcpy((char*)test_str, "61626364");
-	strcpy((char*)correct_str, "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589");
-	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 4, 0, &logStr);
-	sprintf(logMsg, "BASIC TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
-	strcat(logResult, logMsg);
+		strcpy((char*)test_str, "61626364");
+		strcpy((char*)correct_str, "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589");
+		testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 4, 0, &logStr);
+		sprintf(logMsg, "BASIC TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+		strcat(logResult, logMsg);
 	POP_DOMAIN(handle);
 
 	// 32 BYTE MESSAGE
 	PUSH_DOMAIN(handle, "32B TEST", 1, 1);
-	strcpy((char*)test_str, "1979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f56");
-	strcpy((char*)correct_str, "928e8c1f694fc888316690b3c05573c226785344941bed6016909aefb07ecb6d");
-	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 32, 0, &logStr);
-	sprintf(logMsg, "32-BYTE TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
-	strcat(logResult, logMsg);
+		strcpy((char*)test_str, "1979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f56");
+		strcpy((char*)correct_str, "928e8c1f694fc888316690b3c05573c226785344941bed6016909aefb07ecb6d");
+		testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 32, 0, &logStr);
+		sprintf(logMsg, "32-BYTE TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+		strcat(logResult, logMsg);
 	POP_DOMAIN(handle);
 
 	// 64 BYTE MESSAGE
 	PUSH_DOMAIN(handle, "64B TEST", 2, 2);
-	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e");
-	strcpy((char*)correct_str, "8e8ce198ef7f22243d9ed05b336b49a8051003a45c5e746ae2d7965d9d93b072");
-	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 64, 0, &logStr);
-	sprintf(logMsg, "64-BYTE TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
-	strcat(logResult, logMsg);
+		strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e");
+		strcpy((char*)correct_str, "8e8ce198ef7f22243d9ed05b336b49a8051003a45c5e746ae2d7965d9d93b072");
+		testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 64, 0, &logStr);
+		sprintf(logMsg, "64-BYTE TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+		strcat(logResult, logMsg);
 	POP_DOMAIN(handle);
 
 	// 80 BYTE MESSAGE
 	PUSH_DOMAIN(handle, "80B TEST", 3, 3);
-	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
-	strcpy((char*)correct_str, "c45337946ef4402f6bf49e03039ca5d1dcf5edb5f885110fdb3f2e690d2ccb35");
-	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0, &logStr);
-	sprintf(logMsg, "BLOCK TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
-	strcat(logResult, logMsg);
+		strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
+		strcpy((char*)correct_str, "c45337946ef4402f6bf49e03039ca5d1dcf5edb5f885110fdb3f2e690d2ccb35");
+		testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0, &logStr);
+		sprintf(logMsg, "BLOCK TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+		strcat(logResult, logMsg);
 	POP_DOMAIN(handle);
 
 	// 80 BYTE MESSAGE (DOUBLE HASH)
 	PUSH_DOMAIN(handle, "80B MINING TEST", 4, 4);
-	strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
-	strcpy((char*)correct_str, "265a66f42191c9f6b26a1b9d4609d76a0b5fdacf9b82b6de8a3b3e904f000000");
-	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 1, &logStr);
-	sprintf(logMsg, "DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
-	strcat(logResult, logMsg);
+		PUSH_DOMAIN(handle, "DEFAULT HASH", 4, 0);
+			strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
+			strcpy((char*)correct_str, "265a66f42191c9f6b26a1b9d4609d76a0b5fdacf9b82b6de8a3b3e904f000000");
+			testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 1, &logStr);
+			sprintf(logMsg, "DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+			strcat(logResult, logMsg);
+		POP_DOMAIN(handle);
+		// NEW DOUBLE HASH FUNCTION
+		PUSH_DOMAIN(handle, "ACCEL HASH", 4, 1);
+			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x1e, &logStr);
+			sprintf(logMsg, "NEW DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+			strcat(logResult, logMsg);
+		POP_DOMAIN(handle);
 	POP_DOMAIN(handle);
 
-	// VERIFY MINING TEST
-	PUSH_DOMAIN(handle, "VERIFY MINING TEST", 5, 5);
-	strcpy((char*)test_str, "0100000065119c7894e4d7fcf6041d7866b6e7b53fdb44dacd048b2ae72db9339a000000f57b5290c9f21cb3ca9428a2c3efb60a37e1e17ae6cc4673db36b16848ef73d15c3312041d00ffff034b631f");
-	strcpy((char*)correct_str, "5417d0cfb72640adf41bd7b64a89852692a50d7bc1734aa0c0b580ac6b000000");
-	testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 1, &logStr);
-	sprintf(logMsg, "DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
-	strcat(logResult, logMsg);
+
+
+
+	// VARIOUS DIFFICULTIES TEST
+	PUSH_DOMAIN(handle, "DIFFICULTY TEST", 5, 5);
+		// 2 ZEROS (DIFFICULTY: 0x2000ffff)
+		PUSH_DOMAIN(handle, "D=0x2000ffff", 5, 0);
+			strcpy((char*)test_str, "01000000a509fafcf42a5f42dacdf8f4fb89ff525c0ee3acb0d68ad364f2794f2d8cd1007d750847aac01636528588e2bccccb01a91b0b19524de666fdfaa4cfad669fcd5c39b1141d00ffff00005cc0");
+			strcpy((char*)correct_str, "d1bca1de492c24b232ee591a1cdf16ecd8c51400d4da49a97f9536f27b286e00");
+			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x20, &logStr);
+			sprintf(logMsg, "DIFFICULTY TEST 1 [0x2000ffff]: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+			strcat(logResult, logMsg);
+		POP_DOMAIN(handle);
+		// 4 ZEROS (DIFFICULTY: 0x1f00ffff)
+		PUSH_DOMAIN(handle, "D=0x1f00ffff", 5, 1);
+			strcpy((char*)test_str, "010000008e2e5fd95b75846393b579f7368ebbee8ca593ed574dd877b4255e1385cd0000286e0824b41e054a6afea14b0b4588017895ace8f9cc4837279074e238462cd75c340d171d00ffff0002043d");
+			strcpy((char*)correct_str, "fbbb3f2adadd66d9d86cdacc735f99edece886faed7a0fbc17594da445820000");
+			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x1f, &logStr);
+			sprintf(logMsg, "DIFFICULTY TEST 2 [0x1f00ffff]: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+			strcat(logResult, logMsg);
+		POP_DOMAIN(handle);
+		// 6 ZEROS (DIFFICULTY: 0x1e00ffff)
+		PUSH_DOMAIN(handle, "D=0x1e00ffff", 5, 2);
+			strcpy((char*)test_str, "010000000298ff1c6d24d9f04ed441ce3f3a4b695d7fdb8cc13bc7f7417a68a44b000000d49d1c71552793e1d9182ab63ca5fe8d23f2711ecb26f7b0f9ad931c5980aadb5c340d521c00ffff020caca2");
+			strcpy((char*)correct_str, "46b26c30b35175ecb88ddbe08f2d56070f616b2d6f302ef334286fc575000000");
+			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x1e, &logStr);
+			sprintf(logMsg, "DIFFICULTY TEST 3 [0x1e00ffff]: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+			strcat(logResult, logMsg);
+		POP_DOMAIN(handle);
+		// 8 ZEROS (DIFFICULTY: 0x1d00ffff)
+		PUSH_DOMAIN(handle, "D=0x1d00ffff", 5, 3);
+			strcpy((char*)test_str, "01000000ac44a5ddb3c7a252ab2ea9278ab4a27a5fd88999ff192d5f6e86f66b000000009984a9337cf3852ef758d5f8baf090700c89133ba9c19e27f39b465942d8e7465c3440bd1b00ffffdba51c5e");
+			strcpy((char*)correct_str, "30498d768dba64bd6b1455ae358fefa3217096449f05800b61e2e93b00000000");
+			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x1d, &logStr);
+			sprintf(logMsg, "DIFFICULTY TEST 4 [0x1d00ffff]: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+			strcat(logResult, logMsg);
+		POP_DOMAIN(handle);
+		// 16 ZEROS (DIFFICULTY: 0x1900ffff)
+		PUSH_DOMAIN(handle, "D=0x1900ffff", 5, 4);
+			strcpy((char*)test_str, "0100000081cd02ab7e569e8bcd9317e2fe99f2de44d49ab2b8851ba4a308000000000000e320b6c2fffc8d750423db8b1eb942ae710e951ed797f7affc8892b0f1fc122bc7f5d74df2b9441a42a14695");
+			strcpy((char*)correct_str, "1dbd981fe6985776b644b173a4d0385ddc1aa2a829688d1e0000000000000000");
+			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x19, &logStr);
+			sprintf(logMsg, "DIFFICULTY TEST 5 [0x1900ffff]: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
+			strcat(logResult, logMsg);
+		POP_DOMAIN(handle);
 	POP_DOMAIN(handle);
 
 	// DESTROY FUNCTIONAL TEST DOMAIN
@@ -1553,6 +1683,9 @@ __host__ void hostFunctionalTest(void){
 
 	strcat(logResult, "********************************************************************************\n\n");
   printLog(logResult);
+
+	// RETURN DIFF_REDUCE TO ITS ORIGINAL VALUE
+	DIFF_REDUCE = temp_reduce;
 
 	free(test_h);
   cudaFree(test_d);
@@ -1604,6 +1737,80 @@ __host__ void testHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE 
 	return;
 }
 
+__host__ void testMiningHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE * test_d, BYTE * result_h, BYTE * result_d, int test_size, BYTE diff_pow, char ** logStr){
+	BYTE result_str[65];
+	BYTE correct_hex[32];
+	int hash_match;
+	cudaStream_t test_stream;
+	cudaStreamCreate(&test_stream);
+
+	double t_difficulty;
+	int t_target_length;
+	int * success_h;
+	int * success_d;
+
+	success_h = (int*)malloc(sizeof(int));
+	cudaMalloc((void **) &success_d, sizeof(int));
+
+	// SET DIFFICULTY (pow 0x1d -> target 00000000FFFF )
+	test_h[72] = diff_pow;
+	test_h[73] = 0x00;
+	test_h[74] = 0xff;
+	test_h[75] = 0xff;
+
+	WORD * target_h;
+	target_h = (WORD*)malloc(TARGET_SIZE);
+	getMiningDifficulty(test_h, &target_h, &t_target_length, &t_difficulty, 0);
+	printf("TARGET: %08x%08x%08x%08x%08x%08x%08x%08x\n\n", target_h[0], target_h[1], target_h[2], target_h[3], target_h[4], target_h[5], target_h[6], target_h[7]);
+	cudaMemcpyToSymbolAsync(test_target_c, target_h, TARGET_SIZE, 0, cudaMemcpyHostToDevice, test_stream);
+
+	// ADD NAME TO STREAM
+	char stream_name[50];
+	sprintf(stream_name, "TEST STREAM %i", TEST_COUNT);
+	TEST_COUNT++;
+	NAME_STREAM(test_stream, stream_name);
+
+	memset(test_h, 0, BLOCK_SIZE);
+	cudaMemcpyAsync(result_d, test_h, HASH_SIZE, cudaMemcpyHostToDevice, test_stream);
+	encodeHex(test_str, test_h, test_size*2);
+
+	cudaMemcpyAsync(test_d, test_h, BLOCK_SIZE, cudaMemcpyHostToDevice, test_stream);
+	//cudaMemcpyAsync(t_target_d, t_target_h, TARGET_SIZE, cudaMemcpyHostToDevice, test_stream);
+
+	WORD * basemsg_h;
+	basemsg_h = (WORD *)malloc(sizeof(WORD)*16);
+	// SET SYMBOL FOR BASE BLOCK
+	for(int i = 0; i < 16; i++){
+		basemsg_h[i] = (test_h[i*4] << 24) | (test_h[i*4+1] << 16) | (test_h[i*4+2] << 8) | (test_h[i*4+3]);
+	}
+	cudaMemcpyToSymbolAsync(test_basemsg_c, basemsg_h, sizeof(WORD)*16, 0, cudaMemcpyHostToDevice, test_stream);
+
+	hashTestMiningKernel<<<1, 1, 0, test_stream>>>(test_d, result_d, success_d);
+	cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost, test_stream);
+	cudaMemcpyAsync(success_h, success_d, sizeof(int), cudaMemcpyDeviceToHost, test_stream);
+	cudaDeviceSynchronize();
+	cudaStreamDestroy(test_stream);
+
+	// Compare results
+	decodeHex(result_h, result_str, 32);
+	encodeHex(correct_str, correct_hex, 64);
+	hash_match = strcmp((char*)result_str, (char*)correct_str);
+	if(hash_match == 0){
+		sprintf(*logStr, "SUCCESS, TARGET MET VALUE: %i", *success_h);
+	}else{
+		sprintf(*logStr, "FAILED, TARGET MET VALUE: %i\n \t\tEXPECTED: %s\n \t\tRECEIVED: %s", *success_h, correct_str, result_str);
+	}
+
+	free(success_h);
+	cudaFree(success_d);
+
+	free(target_h);
+	free(basemsg_h);
+
+	return;
+}
+
+
 __host__ void hostBenchmarkTest(int num_workers){
   // INITIALIZE BENCHMARK VARIABLES
   BYTE * test_block_h;
@@ -1645,13 +1852,9 @@ __host__ void hostBenchmarkTest(int num_workers){
 
   cudaEventElapsedTime(&bench_time, bench_s, bench_f);
 
-  worker_time = 0x0FFFFFFF/(bench_time/1000);
+  worker_time = 0xEFFFFFFF/(bench_time/1000);
   block_time = worker_time/(MAX_BLOCKS/num_workers);
   thread_time = block_time/NUM_THREADS;
-
-
-
-
 
   sprintf(logResult, "\n/****************************BENCHMARK ANALYSIS FOR %i WORKER CHAINS****************************/\n\
   TOTAL TIME: %f\n\
@@ -1672,7 +1875,111 @@ __host__ void hostBenchmarkTest(int num_workers){
 }
 
 
+// TEST FUNCTION FOR IMPROVED MINING KERNEL, WHICH IS ACCELERATED WITH THE USE OF
+// PRECOMPUTED BLOCK HASHING CONSTANTS AND LOWER MEMORY USAGE
+__host__ void miningBenchmarkTest(int num_workers){
+  // INITIALIZE BENCHMARK VARIABLES
+  BYTE * test_block_h;
+  BYTE * test_block_d;
 
+	BYTE * test_hash_h;
+	BYTE * test_hash_d;
+
+	double t_difficulty;
+	int t_target_length;
+  char logResult[1000];
+  float bench_time, worker_time, block_time, thread_time;
+  cudaEvent_t bench_s, bench_f;
+  cudaStream_t bench_stream;
+
+  createCudaVars(&bench_s, &bench_f, &bench_stream);
+
+	// INITIALIZE BENCHMARK PROFILING DOMAIN
+	char stream_name[50];
+	sprintf(stream_name, "BENCHMARK STREAM");
+	NAME_STREAM(bench_stream, stream_name);
+	#ifdef USE_NVTX
+		DOMAIN_HANDLE handle;
+	#endif
+	DOMAIN_CREATE(handle, "BENCHMARK TEST");
+	PUSH_DOMAIN(handle, "BENCHMARK TEST", 0, 0);
+
+  // Allocate test block memory
+  test_block_h = (BYTE *)malloc(BLOCK_SIZE);
+  cudaMalloc((void **) &test_block_d, BLOCK_SIZE);
+
+	test_hash_h = (BYTE *)malloc(HASH_SIZE);
+	cudaMalloc((void **) &test_hash_d, HASH_SIZE);
+
+  // CREATE RANDOM TEST BLOCK
+  srand(time(0));
+  for(int i = 0; i < 80; i++){
+      test_block_h[i] = (rand() % 255) & 0xFF;
+  }
+	// SET HIGH DIFFICULTY
+	test_block_h[72] = 0x1c;
+	test_block_h[73] = 0x00;
+	test_block_h[74] = 0xff;
+	test_block_h[75] = 0xff;
+
+  cudaEventRecord(bench_s, bench_stream);
+  cudaMemcpyAsync(test_block_d, test_block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, bench_stream);
+
+	// INITIALIZE CONSTANTS FOR USE IN THE MINING KERNEL
+	WORD * target_h;
+	target_h = (WORD*)malloc(TARGET_SIZE);
+	WORD * basemsg_h;
+	basemsg_h = (WORD *)malloc(sizeof(WORD)*16);
+
+	getMiningDifficulty(test_block_h, &target_h, &t_target_length, &t_difficulty, 0);
+	cudaMemcpyToSymbolAsync(test_target_c, target_h, TARGET_SIZE, 0, cudaMemcpyHostToDevice, bench_stream);
+
+	// INITIALIZE MESSAGE SCHEDULE WITH CONSTANT BASE BLOCK, NO EXTRA REGISTERS USED!!
+	for(int i = 0; i < 16; i++){
+		basemsg_h[i] = (test_block_h[i*4] << 24) | (test_block_h[i*4+1] << 16) | (test_block_h[i*4+2] << 8) | (test_block_h[i*4+3]);
+	}
+	cudaMemcpyToSymbolAsync(test_basemsg_c, basemsg_h, sizeof(WORD)*16, 0, cudaMemcpyHostToDevice, bench_stream);
+
+	// Copy to symbols
+//	cudaMemcpyToSymbolAsync(test_unique_c, &(test_block_h[64]), sizeof(BYTE)*16, 0, cudaMemcpyHostToDevice, bench_stream);
+
+  miningBenchmarkKernel<<<MAX_BLOCKS/num_workers, NUM_THREADS, 0, bench_stream>>>(test_block_d, test_hash_d);
+
+  cudaEventRecord(bench_f, bench_stream);
+	cudaMemcpyAsync(test_block_h, test_block_d, BLOCK_SIZE, cudaMemcpyDeviceToHost, bench_stream);
+	cudaMemcpyAsync(test_hash_h, test_hash_d, HASH_SIZE, cudaMemcpyDeviceToHost, bench_stream);
+
+  cudaDeviceSynchronize();
+	POP_DOMAIN(handle);
+
+  cudaEventElapsedTime(&bench_time, bench_s, bench_f);
+
+  worker_time = 0xEFFFFFFF/(bench_time/1000);
+  block_time = worker_time/(MAX_BLOCKS/num_workers);
+  thread_time = block_time/NUM_THREADS;
+
+  sprintf(logResult, "\n/****************************NEW MINING BENCHMARK ANALYSIS FOR %i WORKER CHAINS****************************/\n\
+  TOTAL TIME: %f\n\
+  WORKER HASHES PER SECOND: %f\n\
+  BLOCK HASHES PER SECOND: %f \n\
+  THREAD HASHES PER SECOND: %f \n\
+  /**********************************************************************************************/\n\
+  ", num_workers, bench_time, worker_time, block_time, thread_time);
+  printLog(logResult);
+
+	// DESTROY BENCHMARK TEST DOMAIN
+	DOMAIN_DESTROY(handle);
+
+  destroyCudaVars(&bench_s, &bench_f, &bench_stream);
+  free(test_block_h);
+  cudaFree(test_block_d);
+	free(test_hash_h);
+	cudaFree(test_hash_d);
+
+	free(target_h);
+	free(basemsg_h);
+  return;
+}
 
 
 /***************************************************************************************************************************************************************************/
@@ -1973,6 +2280,29 @@ __host__ void getDifficulty(BYTE * block_h, BYTE ** target, int * target_length,
   printLog((const char*)logOut);
   printDebug((const char*)debugOut);
 }
+
+__host__ void getMiningDifficulty(BYTE * block_h, WORD ** target, int * target_length, double * difficulty, int worker_num){
+  char logOut[100];
+  char debugOut[100];
+	BYTE * target_bytes;
+	target_bytes = (BYTE*)malloc(HASH_SIZE);
+  BYTE block_target[] = {block_h[72], block_h[73], block_h[74], block_h[75]};
+  *target_length = calculateMiningTarget(block_target, target_bytes, *target);
+  *difficulty = calculateDifficulty(block_target);
+  BYTE target_str[100];
+  decodeHex(target_bytes, target_str, *target_length*4);
+  char chain_id[20];
+  if(worker_num == 0){
+    sprintf(chain_id, "PARENT");
+  }else{
+    sprintf(chain_id, "WORKER %i", worker_num);
+  }
+  sprintf(debugOut, "BLOCK TARGET: %02x %02x %02x %02x\n        TARGET VALUE: %s\n", block_target[0], block_target[1], block_target[2], block_target[3], (char*)target_str);
+  sprintf(logOut, "NEW DIFFICULTY %s: %lf", chain_id, *difficulty);
+  printLog((const char*)logOut);
+  printDebug((const char*)debugOut);
+	free(target_bytes);
+}
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /************************************************************************MINING CALCULATION FUNCTIONS***********************************************************************/
 // GET THE MINING DIFFICULTY FROM THE GIVEN BITS, RETURN DIFFICULTY AS A DOUBLE
@@ -2001,6 +2331,33 @@ __host__ int calculateTarget(BYTE * bits, BYTE * target){
       target[i] = 0x00;
     }
   }
+  return length;
+}
+
+// CALCULATE NEW TARGET VALUE IN WORDS, RETURN TARGET LENGTH IN NUMBER OF WORDS
+// REVERSE USUAL BYTE ORDER, 0xFF PADDING INSTEAD OF 0x00
+__host__ int calculateMiningTarget(BYTE * bits, BYTE * target_bytes, WORD * target){
+  // FIRST BYTE DETERMINES TRAILING ZEROS
+  // DIFFICULTY MODIFIED TO REDUCE INITIAL COMPUTATION TIME
+  int padding = (32 - bits[0])-DIFF_REDUCE;
+  int length = (padding + 3);
+	BYTE reverse_bits[3];
+	reverse_bits[0] = bits[3];
+	reverse_bits[1] = bits[2];
+	reverse_bits[2] = bits[1];
+	// COMPUTE BYTES FIRST
+	for(int i = 0; i < 32; i++){
+		if(i < 32-length){
+			target_bytes[i] = 0xFF;
+		}else if(i < 32 - padding){
+			target_bytes[i] = reverse_bits[i - (29 - padding)];
+		}else{
+			target_bytes[i] = 0x00;
+		}
+	}
+	for(int i = 0; i< 8; i++){
+		target[i] = (target_bytes[i*4] << 24) | (target_bytes[i*4+1] << 16) | (target_bytes[i*4+2] << 8) | (target_bytes[i*4+3]);
+	}
   return length;
 }
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
@@ -2546,7 +2903,7 @@ __global__ void benchmarkKernel(BYTE * block_d){
  	    hash_t_f[i] = 0x00;
  	  }
 
- 		while(nonce < 0x0FFFFFFF){
+ 		while(nonce < 0xEFFFFFFF){
  	    threadBlock[76] = (BYTE)(nonce >> 24) & 0xFF;
  	    threadBlock[77] = (BYTE)(nonce >> 16) & 0xFF;
  	    threadBlock[78] = (BYTE)(nonce >> 8) & 0xFF;
@@ -2565,6 +2922,58 @@ __global__ void benchmarkKernel(BYTE * block_d){
  	  }
  }
 
+// BENCHMARK NEW SHA256 FUNCTION
+__global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d){
+	  int success = 0, i = 0;
+	  unsigned int nonce = 0x00000000;
+		unsigned int iteration = 0;
+		unsigned int threadId = threadIdx.x;
+		unsigned int inc_size = blockDim.x * gridDim.x;
+
+		nonce += threadId + blockIdx.x * blockDim.x;
+		unsigned int max_iteration = 0xffffffff / inc_size;
+
+		// THREADS SHARE FIRST 64 BYTES, SET IN CONSTANT MEMORY
+		// EACH THREAD HAS ITS OWN VARIABLE FOR TOP 16 BYTES
+		// ALLOCATED ON SHARED MEMORY TO FREE UP REGISTER USAGE FOR HASHING
+		__shared__ BYTE uniqueBlock[1024*16];
+		BYTE * block_ptr = &(block_d[64]);
+		BYTE * unique_ptr = &(uniqueBlock[threadId*16]);
+
+//		#pragma unroll 16
+		for(i = 0; i < 16; i++){
+			unique_ptr[i] = block_ptr[i];
+			// INIT WITH CONSTANT MEMORY USES FAR FEWER REGISTERS
+	  	//unique_ptr[i] = test_unique_c[i];
+		}
+
+		while(nonce < 0xEFFFFFFF){
+			if(iteration < max_iteration){
+				iteration++;
+			}else{ // UPDATE TIME
+				iteration = 0;
+			}
+
+			unique_ptr[12] = (BYTE)(nonce >> 24) & 0xFF;
+			unique_ptr[13] = (BYTE)(nonce >> 16) & 0xFF;
+			unique_ptr[14] = (BYTE)(nonce >> 8) & 0xFF;
+			unique_ptr[15] = (BYTE)(nonce & 0xFF);
+
+			success = sha256_blockHash_TEST(unique_ptr, hash_d);
+
+			if(success == 0){
+				nonce += inc_size;
+			}
+			else{
+//				#pragma unroll 16
+				for(i = 0; i < 16; i++){
+					block_ptr[i] = unique_ptr[i];
+				}
+				break;
+			}
+	  } // END WHILE LOOP
+}
+
 __global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size){
 	SHA256_CTX thread_ctx;
 
@@ -2575,6 +2984,10 @@ __global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size)
 	return;
 }
 
+__global__ void hashTestMiningKernel(BYTE * test_block, BYTE * result_block, int * success){
+	*success = sha256_blockHash_TEST(&(test_block[64]), result_block);
+	return;
+}
 
  /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
  /***************************************************************************HASH MINING FUNCTIONS***************************************************************************/
@@ -2985,7 +3398,7 @@ __device__ void sha256_final(SHA256_CTX *ctx, BYTE hash[])
 }
 
 // USE VOLATILE TARGET AND COMPARE TO FORCE GLOBAL STORAGE
-__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], volatile BYTE target[], volatile int compare)
+__device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], const BYTE target[], const int compare)
 {
 	WORD i;
 
@@ -3040,5 +3453,315 @@ __device__ int sha256_final_target(SHA256_CTX *ctx, BYTE hash[], volatile BYTE t
 	}
 
 	// Store little endian ordering for bytewise comparison against the desired target
+	return success;
+}
+
+
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+/***************************************************************************************************************************************************************************/
+/***************************************************************************************************************************************************************************/
+/************************  ______________________________________________________________________________________________________________________  *************************/
+/************************  |   _    _           _____ _    _     ____  _____ _______ _____ __  __ _____ ______      _______ _____ ____  _   _   |  *************************/
+/************************  |  | |  | |   /\    / ____| |  | |   / __ \|  __ \__   __|_   _|  \/  |_   _|___  /   /\|__   __|_   _/ __ \| \ | |  |  *************************/
+/************************  |  | |__| |  /  \  | (___ | |__| |  | |  | | |__) | | |    | | | \  / | | |    / /   /  \  | |    | || |  | |  \| |  |  *************************/
+/************************  |  |  __  | / /\ \  \___ \|  __  |  | |  | |  ___/  | |    | | | |\/| | | |   / /   / /\ \ | |    | || |  | | . ` |  |  *************************/
+/************************  |  | |  | |/ ____ \ ____) | |  | |  | |__| | |      | |   _| |_| |  | |_| |_ / /__ / ____ \| |   _| || |__| | |\  |  |  *************************/
+/************************  |  |_|  |_/_/    \_\_____/|_|  |_|   \____/|_|      |_|  |_____|_|  |_|_____/_____/_/    \_\_|  |_____\____/|_| \_|  |	 *************************/
+/************************  |____________________________________________________________________________________________________________________|  *************************/
+/************************                                                                                                                          *************************/
+/***************************************************************************************************************************************************************************/
+/***************************************************************************************************************************************************************************/
+
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/****************************************************************************TRANSFORM FUNCTIONS****************************************************************************/
+
+// DEFAULT TRANSFORM FUNCTION, ASSUMES MESSAGE SCHEDULE HAS BEEN COMPUTED
+__device__ void sha256_mining_transform(WORD state[], WORD m[]){
+	WORD a, b, c, d, e, f, g, h, i, t1, t2;
+
+	a = state[0];
+	b = state[1];
+	c = state[2];
+	d = state[3];
+	e = state[4];
+	f = state[5];
+	g = state[6];
+	h = state[7];
+
+	for (i = 0; i < 64; ++i) {
+		t1 = h + EP1(e) + CH(e,f,g) + k[i] + m[i];
+		t2 = EP0(a) + MAJ(a,b,c);
+		h = g;
+		g = f;
+		f = e;
+		e = d + t1;
+		d = c;
+		c = b;
+		b = a;
+		a = t1 + t2;
+	}
+
+	state[0] += a;
+	state[1] += b;
+	state[2] += c;
+	state[3] += d;
+	state[4] += e;
+	state[5] += f;
+	state[6] += g;
+	state[7] += h;
+}
+
+// MODIFIED TRANSFORM FOR REDUCED MESSAGE SCHEDULE MEMORY SPACE
+// INPUT SCHEDULE MUST CONTAIN FIRST 16 WORDS, THE REST ARE COMPUTED WITHIN THE TRANSFORM FUNCTION
+__device__ void sha256_mining_transform_short(WORD state[], WORD m[]){
+	WORD a, b, c, d, e, f, g, h, i, t1, t2;
+
+	a = state[0];
+	b = state[1];
+	c = state[2];
+	d = state[3];
+	e = state[4];
+	f = state[5];
+	g = state[6];
+	h = state[7];
+
+	// FIRST QUARTER USES PRECOMPUTED MESSAGE SCHEDULE
+	for (i = 0; i < 16; ++i) {
+		t1 = h + EP1(e) + CH(e,f,g) + k[i] + m[i];
+		t2 = EP0(a) + MAJ(a,b,c);
+		h = g;
+		g = f;
+		f = e;
+		e = d + t1;
+		d = c;
+		c = b;
+		b = a;
+		a = t1 + t2;
+	}
+
+	scheduleExpansion_short(m);
+
+	for (i = 0; i < 16; ++i) {
+		t1 = h + EP1(e) + CH(e,f,g) + k[16+i] + m[i];
+		t2 = EP0(a) + MAJ(a,b,c);
+		h = g;
+		g = f;
+		f = e;
+		e = d + t1;
+		d = c;
+		c = b;
+		b = a;
+		a = t1 + t2;
+	}
+
+	scheduleExpansion_short(m);
+
+	for (i = 0; i < 16; ++i) {
+		t1 = h + EP1(e) + CH(e,f,g) + k[32+i] + m[i];
+		t2 = EP0(a) + MAJ(a,b,c);
+		h = g;
+		g = f;
+		f = e;
+		e = d + t1;
+		d = c;
+		c = b;
+		b = a;
+		a = t1 + t2;
+	}
+
+	scheduleExpansion_short(m);
+
+	for (i = 0; i < 16; ++i) {
+		t1 = h + EP1(e) + CH(e,f,g) + k[48+i] + m[i];
+		t2 = EP0(a) + MAJ(a,b,c);
+		h = g;
+		g = f;
+		f = e;
+		e = d + t1;
+		d = c;
+		c = b;
+		b = a;
+		a = t1 + t2;
+	}
+
+	state[0] += a;
+	state[1] += b;
+	state[2] += c;
+	state[3] += d;
+	state[4] += e;
+	state[5] += f;
+	state[6] += g;
+	state[7] += h;
+}
+
+
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/************************************************************************MESSAGE SCHEDULE FUNCTIONS*************************************************************************/
+
+// FULL MESSAGE SCHEDULE COMPUTATION USING FIRST 16 WORDS
+// [NOT RECOMMENDED FOR USE DUE TO HIGH MEMORY USAGE (2KB)]
+__device__ __inline__ void scheduleExpansion(WORD m[]){
+	m[16] = SIG1(m[14]) + m[9] + SIG0(m[1]) + m[0];
+	m[17] = SIG1(m[15]) + m[10] + SIG0(m[2]) + m[1];
+	m[18] = SIG1(m[16]) + m[11] + SIG0(m[3]) + m[2];
+	m[19] = SIG1(m[17]) + m[12] + SIG0(m[4]) + m[3];
+	m[20] = SIG1(m[18]) + m[13] + SIG0(m[5]) + m[4];
+	m[21] = SIG1(m[19]) + m[14] + SIG0(m[6]) + m[5];
+	m[22] = SIG1(m[20]) + m[15] + SIG0(m[7]) + m[6];
+	m[23] = SIG1(m[21]) + m[16] + SIG0(m[8]) + m[7];
+	m[24] = SIG1(m[22]) + m[17] + SIG0(m[9]) + m[8];
+	m[25] = SIG1(m[23]) + m[18] + SIG0(m[10]) + m[9];
+	m[26] = SIG1(m[24]) + m[19] + SIG0(m[11]) + m[10];
+	m[27] = SIG1(m[25]) + m[20] + SIG0(m[12]) + m[11];
+	m[28] = SIG1(m[26]) + m[21] + SIG0(m[13]) + m[12];
+	m[29] = SIG1(m[27]) + m[22] + SIG0(m[14]) + m[13];
+	m[30] = SIG1(m[28]) + m[23] + SIG0(m[15]) + m[14];
+	m[31] = SIG1(m[29]) + m[24] + SIG0(m[16]) + m[15];
+	m[32] = SIG1(m[30]) + m[25] + SIG0(m[17]) + m[16];
+	m[33] = SIG1(m[31]) + m[26] + SIG0(m[18]) + m[17];
+	m[34] = SIG1(m[32]) + m[27] + SIG0(m[19]) + m[18];
+	m[35] = SIG1(m[33]) + m[28] + SIG0(m[20]) + m[19];
+	m[36] = SIG1(m[34]) + m[29] + SIG0(m[21]) + m[20];
+	m[37] = SIG1(m[35]) + m[30] + SIG0(m[22]) + m[21];
+	m[38] = SIG1(m[36]) + m[31] + SIG0(m[23]) + m[22];
+	m[39] = SIG1(m[37]) + m[32] + SIG0(m[24]) + m[23];
+	m[40] = SIG1(m[38]) + m[33] + SIG0(m[25]) + m[24];
+	m[41] = SIG1(m[39]) + m[34] + SIG0(m[26]) + m[25];
+	m[42] = SIG1(m[40]) + m[35] + SIG0(m[27]) + m[26];
+	m[43] = SIG1(m[41]) + m[36] + SIG0(m[28]) + m[27];
+	m[44] = SIG1(m[42]) + m[37] + SIG0(m[29]) + m[28];
+	m[45] = SIG1(m[43]) + m[38] + SIG0(m[30]) + m[29];
+	m[46] = SIG1(m[44]) + m[39] + SIG0(m[31]) + m[30];
+	m[47] = SIG1(m[45]) + m[40] + SIG0(m[32]) + m[31];
+	m[48] = SIG1(m[46]) + m[41] + SIG0(m[33]) + m[32];
+	m[49] = SIG1(m[47]) + m[42] + SIG0(m[34]) + m[33];
+	m[50] = SIG1(m[48]) + m[43] + SIG0(m[35]) + m[34];
+	m[51] = SIG1(m[49]) + m[44] + SIG0(m[36]) + m[35];
+	m[52] = SIG1(m[50]) + m[45] + SIG0(m[37]) + m[36];
+	m[53] = SIG1(m[51]) + m[46] + SIG0(m[38]) + m[37];
+	m[54] = SIG1(m[52]) + m[47] + SIG0(m[39]) + m[38];
+	m[55] = SIG1(m[53]) + m[48] + SIG0(m[40]) + m[39];
+	m[56] = SIG1(m[54]) + m[49] + SIG0(m[41]) + m[40];
+	m[57] = SIG1(m[55]) + m[50] + SIG0(m[42]) + m[41];
+	m[58] = SIG1(m[56]) + m[51] + SIG0(m[43]) + m[42];
+	m[59] = SIG1(m[57]) + m[52] + SIG0(m[44]) + m[43];
+	m[60] = SIG1(m[58]) + m[53] + SIG0(m[45]) + m[44];
+	m[61] = SIG1(m[59]) + m[54] + SIG0(m[46]) + m[45];
+	m[62] = SIG1(m[60]) + m[55] + SIG0(m[47]) + m[46];
+	m[63] = SIG1(m[61]) + m[56] + SIG0(m[48]) + m[47];
+	return;
+}
+
+// OPTIMIZED MEMORY SCHEDULE COMPUTATION USING A REDUCED 16 WORD STATE
+// OPERATIONS ARE IDENTICAL TO THE PREVIOUS FUNCTION, EXCEPT MOD 16
+// TO REDUCE THE OVERALL MEMORY USAGE
+__device__ __inline__ void scheduleExpansion_short( WORD m[]){
+	m[0] = SIG1(m[14]) + m[9] + SIG0(m[1]) + m[0];
+	m[1] = SIG1(m[15]) + m[10] + SIG0(m[2]) + m[1];
+	m[2] = SIG1(m[0]) + m[11] + SIG0(m[3]) + m[2];
+	m[3] = SIG1(m[1]) + m[12] + SIG0(m[4]) + m[3];
+	m[4] = SIG1(m[2]) + m[13] + SIG0(m[5]) + m[4];
+	m[5] = SIG1(m[3]) + m[14] + SIG0(m[6]) + m[5];
+	m[6] = SIG1(m[4]) + m[15] + SIG0(m[7]) + m[6];
+	m[7] = SIG1(m[5]) + m[0] + SIG0(m[8]) + m[7];
+	m[8] = SIG1(m[6]) + m[1] + SIG0(m[9]) + m[8];
+	m[9] = SIG1(m[7]) + m[2] + SIG0(m[10]) + m[9];
+	m[10] = SIG1(m[8]) + m[3] + SIG0(m[11]) + m[10];
+	m[11] = SIG1(m[9]) + m[4] + SIG0(m[12]) + m[11];
+	m[12] = SIG1(m[10]) + m[5] + SIG0(m[13]) + m[12];
+	m[13] = SIG1(m[11]) + m[6] + SIG0(m[14]) + m[13];
+	m[14] = SIG1(m[12]) + m[7] + SIG0(m[15]) + m[14];
+	m[15] = SIG1(m[13]) + m[8] + SIG0(m[0]) + m[15];
+}
+
+/*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/**********************************************************************ACCELERATED HASHING FUNCTIONS************************************************************************/
+
+
+// UNIQUE FUNCTION TO PERFORM DOUBLE HASH (80B | 32B) AND TARGET COMPARISON WITHOUT SHA256 STATE
+// ONLY UPDATE HASH ON SUCCESS, TRIPLE THE DEFAULT MINING SPEED
+// THIS IS A TEST FUNCTION, A FULL FUNCTION WILL NEED TO ACCESS UNIQUE CONSTANT VARIABLES
+__device__ int sha256_blockHash_TEST(BYTE uniquedata[], BYTE hash[]){
+	int i;
+	int success = 1;
+	WORD state[8];    // NEW STATE VARIABLE
+	WORD m[16]; 		// MESSAGE SCHEDULE
+
+	// INIT FIRST HASH STATES USING CONSTANT
+	state[0] = i_state[0];
+	state[1] = i_state[1];
+	state[2] = i_state[2];
+	state[3] = i_state[3];
+	state[4] = i_state[4];
+	state[5] = i_state[5];
+	state[6] = i_state[6];
+	state[7] = i_state[7];
+
+
+	for(i=0; i < 16; i++){
+		m[i] = test_basemsg_c[i];
+	}
+
+	sha256_mining_transform_short(state, m);
+
+
+	// COMPUTE SECOND MESSAGE SCHEDULE, LOAD FIRST 16 BYTES FROM uniquedata
+	m[0] = (uniquedata[0] << 24) | (uniquedata[1] << 16) | (uniquedata[2] << 8) | (uniquedata[3]);
+	m[1] = (uniquedata[4] << 24) | (uniquedata[5] << 16) | (uniquedata[6] << 8) | (uniquedata[7]);
+	m[2] = (uniquedata[8] << 24) | (uniquedata[9] << 16) | (uniquedata[10] << 8) | (uniquedata[11]);
+	m[3] = (uniquedata[12] << 24) | (uniquedata[13] << 16) | (uniquedata[14] << 8) | (uniquedata[15]);
+	// LOAD REMAINING SCHEDULE WITH PRECOMPUTED PADDING VALUES FOR 80 BYTE BLOCK HASH
+	for(i=4; i<16; i++){
+		m[i] = msgSchedule_80B[i];
+	}
+
+	sha256_mining_transform_short(state, m);
+
+	// DOUBLE HASH
+	// STORE RESULTS IN THE MESSAGE SCHEDULE, FIRST HALF OF SCHEDULE IS THE PREVIOUS STATE
+	m[0] = state[0];
+	m[1] = state[1];
+	m[2] = state[2];
+	m[3] = state[3];
+	m[4] = state[4];
+	m[5] = state[5];
+	m[6] = state[6];
+	m[7] = state[7];
+	// LOAD REMAINING SCHEDULE WITH PRECOMPUTED PADDING VALUES FOR 32 BYTE HASH
+	for(i=8; i<16; i++){
+		m[i] = msgSchedule_32B[i];
+	}
+
+	// REINITIALIZE STATE VARIABLES
+	state[0] = i_state[0];
+	state[1] = i_state[1];
+	state[2] = i_state[2];
+	state[3] = i_state[3];
+	state[4] = i_state[4];
+	state[5] = i_state[5];
+	state[6] = i_state[6];
+	state[7] = i_state[7];
+
+	sha256_mining_transform_short(state, m);
+
+	// COMPARE TARGET AGAINST RESULTING STATES
+	success = (COMPARE(state[0],test_target_c[0]) & COMPARE(state[1],test_target_c[1]) & COMPARE(state[2],test_target_c[2]) & COMPARE(state[3],test_target_c[3]) & COMPARE(state[4],test_target_c[4]) & COMPARE(state[5],test_target_c[5]) & COMPARE(state[6],test_target_c[6]) & COMPARE(state[7],test_target_c[7]));
+
+
+	// CONVERT FROM LITTLE ENDIAN TO BIG ENDIAN BYTE ORDER WHEN THE TARGET IS MET
+	if(success == 1){
+		for (i = 0; i < 4; ++i) {
+			hash[i]      = (state[0] >> (24 - i * 8)) & 0x000000ff;
+			hash[i + 4]  = (state[1] >> (24 - i * 8)) & 0x000000ff;
+			hash[i + 8]  = (state[2] >> (24 - i * 8)) & 0x000000ff;
+			hash[i + 12] = (state[3] >> (24 - i * 8)) & 0x000000ff;
+			hash[i + 16] = (state[4] >> (24 - i * 8)) & 0x000000ff;
+			hash[i + 20] = (state[5] >> (24 - i * 8)) & 0x000000ff;
+			hash[i + 24] = (state[6] >> (24 - i * 8)) & 0x000000ff;
+			hash[i + 28] = (state[7] >> (24 - i * 8)) & 0x000000ff;
+		}
+	}
+
 	return success;
 }

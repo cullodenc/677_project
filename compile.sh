@@ -1,1 +1,1 @@
-nvcc cuda_miner.cu -o cuda_miner
+nvcc -maxrregcount 32 cuda_miner.cu -o cuda_miner
