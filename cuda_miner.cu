@@ -680,7 +680,7 @@ __device__ void sha256_mining_transform_short(WORD state[], WORD m[]);
 __device__ __inline__ void scheduleExpansion(WORD m[]);
 __device__ __inline__ void scheduleExpansion_short( WORD m[]);
 
-__device__ int sha256_blockHash_TEST(BYTE uniquedata[], BYTE hash[]);
+__device__ int sha256_blockHash_TEST(WORD uniquedata[], BYTE hash[], WORD basedata[], WORD target[]);
 
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -866,7 +866,7 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
     // RUN BENCHMARK TEST FOR DEVICE PERFORMANCE
     if(bench_flag == 1){
       printf("BENCHMARK TESTING SELECTED!!!!!\n");
-      hostBenchmarkTest(NUM_WORKERS);
+//      hostBenchmarkTest(NUM_WORKERS);
 			printf("\nBLOCK MINING BENCHMARK TESTING:\n");
 			miningBenchmarkTest(NUM_WORKERS);
     }
@@ -2923,8 +2923,9 @@ __global__ void benchmarkKernel(BYTE * block_d){
  }
 
 // BENCHMARK NEW SHA256 FUNCTION
+// TODO ADD MORE ITERATIONS WITH TIMING TO INCREASE ACCURACY
 __global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d){
-	  int success = 0, i = 0;
+	  int success = 0, i = 0, j=0;
 	  unsigned int nonce = 0x00000000;
 		unsigned int iteration = 0;
 		unsigned int threadId = threadIdx.x;
@@ -2936,16 +2937,14 @@ __global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d){
 		// THREADS SHARE FIRST 64 BYTES, SET IN CONSTANT MEMORY
 		// EACH THREAD HAS ITS OWN VARIABLE FOR TOP 16 BYTES
 		// ALLOCATED ON SHARED MEMORY TO FREE UP REGISTER USAGE FOR HASHING
-		__shared__ BYTE uniqueBlock[1024*16];
-		BYTE * block_ptr = &(block_d[64]);
-		BYTE * unique_ptr = &(uniqueBlock[threadId*16]);
+		__shared__ WORD uniqueBlock[4096];
+		WORD * unique_ptr = &(uniqueBlock[threadId*4]);
 
-//		#pragma unroll 16
-		for(i = 0; i < 16; i++){
-			unique_ptr[i] = block_ptr[i];
-			// INIT WITH CONSTANT MEMORY USES FAR FEWER REGISTERS
-	  	//unique_ptr[i] = test_unique_c[i];
-		}
+		// COMPUTE UNIQUE PORTION OF THE BLOCK HERE INSTEAD OF INSIDE THE LOOP FOR SPEEDUP
+		unique_ptr[0] = (block_d[64] << 24) | (block_d[65] << 16) | (block_d[66] << 8) | (block_d[67]);
+		unique_ptr[1] = (block_d[68] << 24) | (block_d[69] << 16) | (block_d[70] << 8) | (block_d[71]);
+		unique_ptr[2] = (block_d[72] << 24) | (block_d[73] << 16) | (block_d[74] << 8) | (block_d[75]);
+		unique_ptr[3] = (block_d[76] << 24) | (block_d[77] << 16) | (block_d[78] << 8) | (block_d[79]);
 
 		while(nonce < 0xEFFFFFFF){
 			if(iteration < max_iteration){
@@ -2954,20 +2953,18 @@ __global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d){
 				iteration = 0;
 			}
 
-			unique_ptr[12] = (BYTE)(nonce >> 24) & 0xFF;
-			unique_ptr[13] = (BYTE)(nonce >> 16) & 0xFF;
-			unique_ptr[14] = (BYTE)(nonce >> 8) & 0xFF;
-			unique_ptr[15] = (BYTE)(nonce & 0xFF);
-
-			success = sha256_blockHash_TEST(unique_ptr, hash_d);
+			unique_ptr[3] = nonce;
+			success = sha256_blockHash_TEST(unique_ptr, hash_d, test_basemsg_c, test_target_c);
+			nonce += inc_size;
 
 			if(success == 0){
-				nonce += inc_size;
-			}
-			else{
-//				#pragma unroll 16
-				for(i = 0; i < 16; i++){
-					block_ptr[i] = unique_ptr[i];
+				// ONLY HERE FOR BRANCH PREDICTION SPEEDUP
+			}else{
+				for(i = 0, j = 64; i < 4; i++, j+=4){
+					block_d[j] = (unique_ptr[i] >> 24) & 0x000000FF;
+					block_d[j+1] = (unique_ptr[i] >> 16) & 0x000000FF;
+					block_d[j+2] = (unique_ptr[i] >> 8) & 0x000000FF;
+					block_d[j+3] = (unique_ptr[i]) & 0x000000FF;
 				}
 				break;
 			}
@@ -2985,7 +2982,12 @@ __global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size)
 }
 
 __global__ void hashTestMiningKernel(BYTE * test_block, BYTE * result_block, int * success){
-	*success = sha256_blockHash_TEST(&(test_block[64]), result_block);
+	WORD uniquedata[4];
+	uniquedata[0] = (test_block[64] << 24) | (test_block[65] << 16) | (test_block[66] << 8) | (test_block[67]);
+	uniquedata[1] = (test_block[68] << 24) | (test_block[69] << 16) | (test_block[70] << 8) | (test_block[71]);
+	uniquedata[2] = (test_block[72] << 24) | (test_block[73] << 16) | (test_block[74] << 8) | (test_block[75]);
+	uniquedata[3] = (test_block[76] << 24) | (test_block[77] << 16) | (test_block[78] << 8) | (test_block[79]);
+	*success = sha256_blockHash_TEST(uniquedata, result_block, test_basemsg_c, test_target_c);
 	return;
 }
 
@@ -3682,7 +3684,7 @@ __device__ __inline__ void scheduleExpansion_short( WORD m[]){
 // UNIQUE FUNCTION TO PERFORM DOUBLE HASH (80B | 32B) AND TARGET COMPARISON WITHOUT SHA256 STATE
 // ONLY UPDATE HASH ON SUCCESS, TRIPLE THE DEFAULT MINING SPEED
 // THIS IS A TEST FUNCTION, A FULL FUNCTION WILL NEED TO ACCESS UNIQUE CONSTANT VARIABLES
-__device__ int sha256_blockHash_TEST(BYTE uniquedata[], BYTE hash[]){
+__device__ int sha256_blockHash_TEST(WORD uniquedata[], BYTE hash[], WORD basedata[], WORD target[]){
 	int i;
 	int success = 1;
 	WORD state[8];    // NEW STATE VARIABLE
@@ -3700,17 +3702,17 @@ __device__ int sha256_blockHash_TEST(BYTE uniquedata[], BYTE hash[]){
 
 
 	for(i=0; i < 16; i++){
-		m[i] = test_basemsg_c[i];
+		m[i] = basedata[i];
 	}
 
 	sha256_mining_transform_short(state, m);
 
 
 	// COMPUTE SECOND MESSAGE SCHEDULE, LOAD FIRST 16 BYTES FROM uniquedata
-	m[0] = (uniquedata[0] << 24) | (uniquedata[1] << 16) | (uniquedata[2] << 8) | (uniquedata[3]);
-	m[1] = (uniquedata[4] << 24) | (uniquedata[5] << 16) | (uniquedata[6] << 8) | (uniquedata[7]);
-	m[2] = (uniquedata[8] << 24) | (uniquedata[9] << 16) | (uniquedata[10] << 8) | (uniquedata[11]);
-	m[3] = (uniquedata[12] << 24) | (uniquedata[13] << 16) | (uniquedata[14] << 8) | (uniquedata[15]);
+	m[0] = uniquedata[0];
+	m[1] = uniquedata[1];
+	m[2] = uniquedata[2];
+	m[3] = uniquedata[3];
 	// LOAD REMAINING SCHEDULE WITH PRECOMPUTED PADDING VALUES FOR 80 BYTE BLOCK HASH
 	for(i=4; i<16; i++){
 		m[i] = msgSchedule_80B[i];
@@ -3746,11 +3748,13 @@ __device__ int sha256_blockHash_TEST(BYTE uniquedata[], BYTE hash[]){
 	sha256_mining_transform_short(state, m);
 
 	// COMPARE TARGET AGAINST RESULTING STATES
-	success = (COMPARE(state[0],test_target_c[0]) & COMPARE(state[1],test_target_c[1]) & COMPARE(state[2],test_target_c[2]) & COMPARE(state[3],test_target_c[3]) & COMPARE(state[4],test_target_c[4]) & COMPARE(state[5],test_target_c[5]) & COMPARE(state[6],test_target_c[6]) & COMPARE(state[7],test_target_c[7]));
+	success = (COMPARE(state[0],target[0]) & COMPARE(state[1],target[1]) & COMPARE(state[2],target[2]) & COMPARE(state[3],target[3]) & COMPARE(state[4],target[4]) & COMPARE(state[5],target[5]) & COMPARE(state[6],target[6]) & COMPARE(state[7],target[7]));
 
 
 	// CONVERT FROM LITTLE ENDIAN TO BIG ENDIAN BYTE ORDER WHEN THE TARGET IS MET
-	if(success == 1){
+	if(success == 0){
+		// FOR BRANCH PREDICTION
+	} else{
 		for (i = 0; i < 4; ++i) {
 			hash[i]      = (state[0] >> (24 - i * 8)) & 0x000000ff;
 			hash[i + 4]  = (state[1] >> (24 - i * 8)) & 0x000000ff;
