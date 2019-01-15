@@ -1,0 +1,265 @@
+This TODO list will be updated periodically as new features are added, and new ideas for improvements are created
+The items below are grouped by the type of task, and listed to some degree by their priority, along with relavent details
+
+FIXME CRITICAL
+Critical issues that have yet to be resolved
+
+  Timing Update Bug(QUEUE BLOCKING)
+    | Summary:
+     -Timing updates blocked by too many operations being added to execute asynchronously
+     -Can be resolved by removing events, but may arise later if more asynchronous stream operations are added
+    | Solution: Restructure code to minimize queued operations
+      -Callbacks may help or hurt this depending on usage
+      -Event Reduction could reduce unneccessarily queued items
+      -Additional intermediate stages could reduce items added to the queue at one time
+
+
+BUG
+Bugs that currently exist in the program, arising under certain circumstances
+
+--Timing Update Bug (QUEUE BLOCKING)
+  | DATE FOUND: 1-12-2019
+  | DATE IDENTIFIED: 1-15-2019
+  | DATE FIXED: N/A
+  | PRIORITY: High
+  | DETAILS:
+    -This bug presented itself through a complete halting of the mining process, with no new blocks after a substantial amount of time had passed
+    -The worker kernels indicated a problem with the current time variable, as the kernel time updates showed no change over the course of several minutes
+    -This bug was experienced near difficulty 0x1d00ffff (MODIFIER=0), with 8 or more workers
+    -This problem persisted for timing stored in constant or global memory, on new and old miners
+    -This bug can be replicated by running the miner with the settings: ./cuda_miner -diff 0 -w 8 (May not appear if you get lucky and multiple times per block arent needed)
+  | CAUSE: Most likely blocked by other kernel streams
+    -Possible explainations could involve blocking of the memory copy engines
+    -The bug doesn't occur at the same point for smaller architectures, and the time required to reach the point of failure doesnt matter
+    -It seems to be directly related to the difficulty level and the number of active workers/streams
+  | DEBUGGING:
+    -Using the default stream to directly obtain information on the timing update, it was found that the update becomes blocked until at least one worker completes its block
+    -If all workers are working on blocks which require an updated time, the time will never update and the program will stall
+  | ATTEMPTED FIXES:
+    --Setting all streams with the nonblocking flag, with a higher priority on the timing stream
+      -Result: Failed, problem persists, and the timing stream simply queues the timing updates without successful completion
+    --Removing event record after the kernel call from previous streams
+      -SUCCESS! - But this prevents accurate timing statistics from being taken, further optimizations required to eliminate this issue completely
+
+
+
+
+TODO CUDA
+Code improvements which are neccessary to have a fully functional program
+
+--Create Designated Copy Streams
+  | PRIORITY: Medium High
+  | Details:
+    -As a potential fix for the timing bug, add dedicated streams for memory copies, which may remove any deadlocks that are created between streams
+    -The ideal scenario would use two high priority memory transfer streams, creating full duplex communication to the GPU
+
+--Optimize other hash functions
+  | PRIORITY: Medium
+  | Details:
+    -Add acceleration for the other hash functions used, similar to the improvements added in for the 80 Byte double hash used in the new miner kernel
+
+--Add profiling visuals for mining
+  | PRIORITY: Low
+  | Details:
+    -Similar to the benchmark and testing functions, add profiling support to the main miner which shows the stream names/activity, and better displays the blocks mined and difficulty scaling
+    -At a basic level, this would simply show the activity, while a more elegant display would use color scaling to better depict the changes in the miner over time
+
+--Use Stream Callbacks
+  | PRIORITY: Low Medium
+  | Details:
+    -The current method of iterating over worker streams and looking for a stream that is ready is an unreliable process that prioritizes based on stream order.
+    -Callbacks could provide a better method for starting the next block, based on when each stream is ready instead of which one is next in line
+    -With callbacks added, the main process would primarily focus on updating constant variables and calling the parent stream when neccessary
+    -The downside is that this would require significant modifications to the existing code, and would probably be best implemented on another branch incase complications arise
+    -Callbacks may also make it easier to implement CPU multithreading later on
+
+--Optimize Merkle Root calculations
+  | PRIORITY: Medium
+  | Details:
+    -The merkle root operation is currently quite bulky on shared memory, and limited in its potential for performance and scaling
+    -Ideally, this algorithm would be adjusted to use built in shuffle functions to speed up the coalescing of data into the final thread
+    -Storing the data in texture memory could also help to improve the performance for bigger transaction sets
+
+--Use merkle root data for workers
+  | PRIORITY: Medium Low
+  | Dependencies: Optimize Merkle Root, Optimize hash functions
+  | Details:
+    -The current algorithm is able to emulate the complexity of a blockchain application, but it lacks the capability to actually process transactions
+    -This should be updated such that the workers each read a block of data from their file and calculate the merkle root prior to mining the data
+    -Using this method may require later optimizations so that the host doesn't get blocked on reading from the input files
+    -This method will also utilize a greater portion of the available memory copy bandwidth, which is currently drastically underutilized
+
+
+TODO Project Management
+
+--Add makefile building
+  | PRIORITY: High
+  | Details:
+    -The current scripts used to build the program are quite limited, and will not work on every system used, thus a more complex build process via a make file would be useful to
+      match system constraints and link in the neccessary libraries
+    -A make file with room for additional arguments could enable the use of a make script or even a short program which can take in user provided arguments for how the code should be built
+    -These arguments would most likely get passed to the compiler, such that the preprocessor can choose the appropriate functions and variables to implement
+
+--Split the code into filesystem
+  | PRIORITY: Medium High
+  | Dependencies: makefile building
+  | Details:
+    -Although combining the code into a single file initially provided an easier means of managing everying, it has since become cumbersome due to the large file size.
+    -Once the core code has been updated to the extent that system wide changes are no longer needed, it would be ideal to split the file by functionality and scope
+    -This requires the use of a makefile to simplify the linking process, and eliminate any performance losses that come from external device functions
+
+--Update Documentation
+  | PRIORITY: Medium
+  | Details:
+    -The documentation for all of the project functions is pretty limited at this point, consisting mainly of inline comments and brief summaries of functionality
+    -During the process of splitting up the main file, it would be beneficial to simultaneously write some more thorough descriptions for each function, such as arguments, purpose, etc
+    -This is best saved for a later point in the process when most of the functions have been fully defined and optimized, preventing the need to constantly update the descriptions
+    -The descriptions should eventually be copied into a more complete documentation file, and an inline documentation system similar to javadoc would be great as well (though it would require many changes)
+
+--Update Github description
+  | PRIORITY: Medium Low
+  | Details:
+    -The description has to be updated at some point if this project is to have any hope of gaining attention and more developers
+    -This will be postponed until the project is at a more stable point of development, and more documentation on the project components are available
+    -It would also be beneficial to have split the project into more organized files at that point
+
+--Create a make helper
+  | Details: Low
+    -If a large number of customizations can be added to the make process, it may be useful to create a make helper application which prompts the user for various inputs
+    -This would be more of a luxary feature, as a simple script could be used to implement default customizations to speed up builds during development
+
+
+TODO PYTHON
+
+--Update output parser
+  | PRIORITY: High
+  | Details:
+    -The current python parser is ignored from the project files as is limited in functionality and currently not capable of parsing the more recent output formatting
+    -The script should be updated to parse all the neccessary files, and organize the required data in spreadsheets
+
+--Create Output Verification
+  | PRIORITY: Medium High
+  | Details:
+    -Some means of verification already exist to test the algorithm functionality, and numerous tests have been done to ensure result validity
+    -Further verification should be done with a simple python script that iterates over the mining results, and checks for any errors that may have occurred during mining
+    -This is only listed lower than the parser as obtaining performance results is slightly more important at this stage in the development process for determining what needs improvement
+
+--Create an analysis script
+  | PRIORITY: Medium
+  | Details:
+    -Having the results parsed out into a timing spreadsheet is extremely useful for performance analysis, but the process of graphing/analyzing these results can still be quite time consuming
+    -Ideally, either a script or a set of functions can be created to automatically generate statistics and graphs for each design run
+    -Some of the goal features may not be possible with the tools that are currently used (such as xlsxwriter) and more research and tools will most likely be needed
+
+
+TODO MISCELLANEOUS
+
+--Worker Variable Consolidation
+  | PRIORITY: Medium
+  | Details:
+    -The current code has a large number of variables which are currently independent, and quite a mess
+    -Update the code to group the variables together into structs, helping with code organization
+
+
+--Create windows compatible alternatives
+  | PRIORITY: Medium
+  | Dependencies: Makefiles
+  | Details:
+    -Much of the development for this project has been done on a linux system, and as such there are several incompatibilities with Windows OS
+    -Some of these differences include the inability to use bash scripts on windows, and the creation of directories using linux formats
+    -Windows OS users would obviously make up a significant portion of end users, and thus these incompatibilities need to be resolved
+    -The easiest solution would be to check for the OS using a make file, and sending preprocessor arguments to define functions accordingly
+
+--Create Better Profiling Scripts
+  | PRIORITY: Medium Low
+  | Details:
+    -The current profiler script is quite basic, and it only sets certain compiler options to enable profiling libraries and functions
+    -To speed up the profiling process, it would be nice to have a script which started the visual profiler with all the neccessary options, saving a couple minutes on each launch and reducing the frequency of errors
+
+
+--Language Update
+  | PRIORITY: Low
+  | Details:
+    -The current code is primarily C, with a little bit of C++ mixed in as cuda functions
+    -Updating this to C++ could provide many object oriented advantages that aren't possible with C
+    -This would also take a lot of effort, and is highly error prone. Thus this task is best reserved for a later point 
+
+
+FIXME CLEANUP
+Changes that should be made to improve the code and eliminate stale content
+
+--Remove obsolete functions, update with replacements
+  | PRIORITY: Medium
+  | Details:
+    -A fair number of the functions used have at some point been either replaced with an improved version or removed due to obsolete functionality
+    -These should be deleted when they are no longer of any use
+
+--Variable cleanup
+  | PRIORITY: Low Medium
+  | Details:
+    -Some of the variables used in the program are not neccessary, messy, or redundant, and should be optimized if they are of minimal risk
+    -Examples include variable declarations midway through a function, variables which no longer serve a purpose in a specific context, or variables contain duplicate data
+    -These should be fixed when encountered as long as the risk of introducing bugs is low
+
+--Eliminate old files
+  | PRIORITY: Low
+  | Details:
+    -The original source files used for this project were originally kept as backup references, but are unneccessary at this point, and should be deleted (or at least moved out of the active repo)
+
+
+IDEA FUTURE IMPROVEMENTS
+
+--Implement CPU Multithreading
+  | PRIORITY: Medium (depending)
+  | Details:
+    -The current application is not currently hindered by blocking on the CPU, but improvements such as using full transaction blocks would lead to a large time being spent on loading data
+    -Since only a single CPU core can effectively control the GPU at a time, it would be advantageous to free up activity on that core by offloading non-device related work to other threads
+    -This can include most of the file management, and potentially network or cluster related functions when later modules are added
+    -With the current developer skill set, the use of OpenMP and MPI would be the primary options for this multithreading
+    -Using this method would require a major overhaul of the current code, and would most likely be postponed until the larger blockchain framework was developed
+    -These features would be implemented as follows to meet the needs of a high performance computing environment:
+      --OpenMP (or similar shared memory framework):
+        -The shared memory design of OpenMP would make is an ideal environment for file control and worker management
+        -Ideally, the threads would each be assigned a worker, and they would prefetch transaction data and write results to the neccessary files without blocking the host execution
+        -Thread assignment would also need to be managed such that the host cores are always available to handle communication with the GPU
+        -For multi GPU systems and HPC clusters, a more complex framework would be needed to control which GPU is being used, and their associated CPU threads
+        -At least one host core is needed, with the potential to have one core per GPU if the system allows it. Additional cores for inter cluster communication and networking may also be needed
+      --MPI:
+        -If more than one cluster is used, a framework such as MPI would be more suitable for performing communication between nodes
+        -This would be done after the shared memory implementation, as it currently can't be tested for free (a cloud based solution would most likely be used)
+      --OTHER:
+        -To enable full networking capabilities, other IP compatible frameworks would be needed
+        -Developer knowledge for merging a C application to use web frameworks are limited (aside from server hosting using Javascript or PHP), and more research will be needed
+
+
+--Functional Blockchain Application:
+  | Details:
+    -This is a late stage addition, after all the ground work has been laid out, and the analysis results are promising
+    -Since the development team is small, and the amount of required functionality is massive, it may be optimal to fork some of these features off existing open-source blockchains
+    -Using existing sources would also lower the risk of creating vulnerabilities which have already been discovered (and subsequently exploited)
+
+    --Networking capabilities
+      | Details:
+        -This one should be pretty obvious, you can't have a distributed public ledger unless its distributed, so secure networking between miners and users is a must
+        -Part of this portion of the application will also be management of the ledger, and security features to mitigate risks like DDoS
+
+    --Transaction functionality
+      | Details:
+        -If tokens are used to attract users to the blockchain, then it is a requirement to enable transactions of coins, and verification of both transactions and accounts
+        -This is a massive category due to the inherent security risks, along with the options for features like smart contracts
+
+    --Chain Management
+      | Details:
+        -A branched chain will require a variety of maintenence features to keep it running and secure, these range from functions to determine when a block is securely on the chain, to stale branch pruning
+
+    --Parent Branch
+      | Details:
+        -The current parent chain infrastructure doesn't really add very much to the chain in terms of security and functionality.
+        -Additional packages will need to be added to update the parent chain security, such as linking with child chains, and miner cross verification
+        -The possibility to implement proof of stake exists for the parent chain, but this is dependant on there actually being something at stake
+
+    --Miscellaneous
+      | Details:
+        -Lots of other features exist to make a complete application, and they will be added in as the project progresses.
+        -Other potential features for different purposes other than cryptocurrencies may be a promising avenue of development
+        -A sidechain similar to namecoin could be used to keep track of all the child chains, while also providing a barrier of entry to create a child chain, limiting the potential for abuse
