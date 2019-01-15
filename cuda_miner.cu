@@ -315,11 +315,17 @@ typedef struct {
 /**************************************************************************CONSTANT DEFINITIONS*****************************************************************************/
 /***************************************************************************************************************************************************************************/
 #define SHA256_BLOCK_SIZE 32            // SHA256 outputs a 32 byte digest
-#define BLOCK_SIZE sizeof(BYTE)*80
-#define BASE_SIZE sizeof(BYTE)*64
-#define HASH_SIZE sizeof(BYTE)*32
-#define NONCE_SIZE sizeof(BYTE)*4
-#define TARGET_SIZE sizeof(WORD)*8
+#define BLOCK_SIZE sizeof(BYTE)*80 			// SIZE OF EACH BLOCK IN BYTES
+#define BASE_SIZE sizeof(BYTE)*64				// SIZE OF BLOCK BASE IN BYTES
+#define HASH_SIZE sizeof(BYTE)*32				// SIZE OF HASH IN BYTES
+#define NONCE_SIZE sizeof(BYTE)*4				// SIZE OF NONCE
+
+#define TARGET_C_SIZE sizeof(WORD)*8		// SIZE OF CONSTANT TARGET (WORDS)
+#define BLOCK_C_SIZE sizeof(WORD)*16			// SIZE OF CONSTANT BLOCK (WORDS)
+
+#define MAX_WORKERS 16 // 16 WORKERS MAX BASED ON MAX BLOCK SIZE
+#define BLOCK_CONST_SIZE (MAX_WORKERS+1)*16
+#define TARGET_CONST_SIZE (MAX_WORKERS+1)*8
 
 
 __constant__ WORD k[64] = { // SHA256 constants
@@ -362,8 +368,10 @@ __constant__ WORD msgSchedule_32B[16] = {
 __constant__ WORD test_basemsg_c[16];
 __constant__ WORD test_target_c[8];
 
-
-
+// MINING CONSTANTS
+__constant__ WORD block_const[BLOCK_CONST_SIZE];
+__constant__ WORD target_const[TARGET_CONST_SIZE];
+__constant__ WORD time_const;
 
 /***************************************************************************************************************************************************************************/
 /**************************************************************************PROFILING DEFINITIONS****************************************************************************/
@@ -478,9 +486,9 @@ int TEST_COUNT = 0;
 /***************************************************************************************************************************************************************************/
 /****************************************************************************GLOBAL VARIABLES*******************************************************************************/
 /***************************************************************************************************************************************************************************/
-
+#define AVAILABLE_BLOCKS 20 	// TOTAL NUMBER OF POSSIBLE CONCURRENT BLOCKS
 #define NUM_THREADS 1024
-#define MAX_BLOCKS 16
+#define MAX_BLOCKS 16					// MAXIMUM NUMBER OF BLOCKS TO BE ALLOCATED FOR WORKERS
 #define PARENT_BLOCK_SIZE 16
 #define DIFFICULTY_LIMIT 32
 
@@ -494,8 +502,8 @@ int TARGET_DIFFICULTY = 1;
 // INPUTS GENERATED = LOOPS * NUM_THREADS * NUM_BLOCKS
 #define INPUT_LOOPS 25
 
-// Exponentially reduce computation time, 0 is normal, positive values up to 3 drastically reduce difficulty
-int DIFF_REDUCE = 2;
+// Exponentially reduce computation time, 0 is normal, negative values down to -3 drastically reduce difficulty, highest difficulty is 26
+int DIFF_REDUCE = -1;
 
 // INITIALIZE DEFAULT GLOBAL VARIABLES FOR COMMAND LINE OPTIONS
 // INFORMATIVE COMMAND OPTIONS
@@ -509,7 +517,9 @@ int NUM_WORKERS = 1;      // NUMBER OF WORKERS 1 BY DEFAULT
 // MINING COMMAND OPTIONS
 // FIXME: ADD NUM_THREADS, MAX_BLOCKS, OPTIMIZE_BLOCKS, etc. here
 
+//#define WORKER_BLOCKS ((MULTILEVEL == 1) ? MAX_BLOCKS: AVAILABLE_BLOCKS)/NUM_WORKERS
 #define WORKER_BLOCKS MAX_BLOCKS/NUM_WORKERS
+#define PARENT_BLOCKS AVAILABLE_BLOCKS-MAX_BLOCKS
 
 
 
@@ -556,8 +566,8 @@ __host__ void freeFileStrings(char * str[], int num_workers);
 /*-------------------------------------------------------------------------CUDA/TIMING MANAGEMENT--------------------------------------------------------------------------*/
 __host__ void createCudaVars(cudaEvent_t * timing1, cudaEvent_t * timing2, cudaStream_t * stream);
 __host__ void destroyCudaVars(cudaEvent_t * timing1, cudaEvent_t * timing2, cudaStream_t * stream);
-__host__ void initTime(cudaStream_t * tStream, BYTE ** time_h, BYTE ** time_d);
-__host__ void freeTime(cudaStream_t * tStream, BYTE ** time_h, BYTE ** time_d);
+__host__ void initTime(cudaStream_t * tStream, WORD ** time_h);
+__host__ void freeTime(cudaStream_t * tStream, WORD ** time_h);
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 /***************************************************************************************************************************************************************************/
@@ -572,12 +582,13 @@ __host__  int updateBlock(FILE * inFile, BYTE * block_h, BYTE * hash_h);
 __host__ void updateParentRoot(BYTE * block_h, BYTE * hash_h);
 __host__ void updateParentHash(BYTE * block_h, BYTE * hash_h);
 __host__ void updateDifficulty(BYTE * block_h, int diff_level);
-__host__ void updateTime(cudaStream_t * tStream, BYTE * time_h, BYTE * time_d);
+__host__ void updateTime(cudaStream_t * tStream, WORD * time_h);
 /*-----------------------------------------------------------------------------MINING GETTERS------------------------------------------------------------------------------*/
 __host__ void getTime(BYTE * byte_time);
 __host__ void getDifficulty(BYTE * block_h, BYTE ** target, int * target_length, double * difficulty, int worker_num);
 // VARIANT TO GET TARGET AS WORDS INSTEAD OF BYTES, REVERSE BYTE ORDER
 __host__ void getMiningDifficulty(BYTE * block_h, WORD ** target, int * target_length, double * difficulty, int worker_num);
+__host__ void setMiningDifficulty(cudaStream_t * stream, BYTE * block_h, int worker_num);
 /*---------------------------------------------------------------------------MINING CALCULATIONS---------------------------------------------------------------------------*/
 __host__ double calculateDifficulty(BYTE * bits);
 __host__ int calculateTarget(BYTE * bits, BYTE * target);
@@ -592,7 +603,7 @@ __host__ void genHashKernel(BYTE ** hash_hf, BYTE ** hash_df, BYTE ** seed_h, BY
 /*----------------------------------------------------------------------------MERKLE TREE KERNEL---------------------------------------------------------------------------*/
 __host__ void launchMerkle(cudaStream_t * stream, BYTE ** merkle_d, BYTE ** root_d, BYTE ** merkle_h, BYTE ** root_h, int ** flag_d,  int * flag_h, int buffer_size);
 /*------------------------------------------------------------------------------MINING KERNEL------------------------------------------------------------------------------*/
-__host__ void launchMiner(int num_blocks, cudaStream_t * stream, BYTE ** block_d, BYTE ** hash_d, BYTE ** nonce_d, BYTE ** block_h, BYTE ** hash_h, BYTE ** nonce_h, BYTE ** target_d, BYTE ** time_d, int ** flag_d,  int * flag_h, int * target_length);
+__host__ void launchMiner(int kernel_id, cudaStream_t * stream, BYTE ** block_d, BYTE ** hash_d, BYTE ** nonce_d, BYTE ** block_h, BYTE ** hash_h, BYTE ** nonce_h, BYTE ** target_d, int ** flag_d,  int * flag_h, int * target_length);
 __host__ void returnMiner(cudaStream_t * stream, BYTE ** block_d, BYTE ** hash_d, BYTE ** nonce_d, BYTE ** block_h, BYTE ** hash_h, BYTE ** nonce_h);
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -642,13 +653,14 @@ __host__ void printOutputFile(char * outFileName, BYTE * block_h, BYTE * hash_f,
 __global__ void cudaTest(void);
 // FIXME ADD MORE TEST KERNELS HERE
 __global__ void benchmarkKernel(BYTE * block_d);
-__global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d);
+__global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d, int * flag_d, int * total_iterations);
 __global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size);
 __global__ void hashTestMiningKernel(BYTE * test_block, BYTE * result_block, int * success);
 
 /*-----------------------------------------------------------------------------MINING FUNCTIONS----------------------------------------------------------------------------*/
 __global__ void genTestHashes(BYTE * hash_df, BYTE * seed, int num_blocks);
-__global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE * target, BYTE * time_d, int * flag_d, int compare, int num_blocks);
+__global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE * target, int * flag_d, int compare);
+__global__ void minerKernel_new(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, int * flag_d, int block_offset, int target_offset);
 __global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks);
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -802,12 +814,12 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 			}
 			else if(strcmp(arg_in, "-diff") == 0){
 					if(i+1 < argc){
-						if(atoi(argv[i+1]) >= 0){
+						if(atoi(argv[i+1]) >= -3 && atoi(argv[i+1]) <= 26){
 							DIFF_REDUCE = atoi(argv[i+1]);
-							printf("STARTING DIFFICULTY SET TO %i\n", DIFF_REDUCE);
+							printf("STARTING DIFFICULTY MODIFIER SET TO %i\n", DIFF_REDUCE);
 							i++;
 						} else{
-							printf("%s   fatal:  OPTION '-diff' EXPECTS A POSITIVE INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							printf("%s   fatal:  OPTION '-diff' EXPECTS AN INTEGER ARGUMENT BETWEEN -3 AND 26, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
 							err_flag = 1;
 							break;
 						}
@@ -817,8 +829,12 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 						break;
 					}
 			}
+			else{
+				printf("%s   fatal:  UNKNOWN ARGUMENT '%s'\n\n", argv[0], argv[i]);
+				err_flag = 1;
+				break;
+			}
       //FIXME: ADD ADDITIONAL OPTIONS HERE FOR OTHER DESIGN PARAMETERS
-
   }
 
   // TODO ADD VARIABLE VERIFICATION HERE, RAISE ERROR FLAG IF A PROBLEM IS ENCOUNTERED
@@ -850,7 +866,7 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 \t --multi \t\t MULTILEVEL ARCHITECTURE (DEFAULT: DISABLED)\n\
 \t  -w #   \t\t NUMBER OF WORKER CHAINS AS A POSITIVE NON-ZERO INTEGER (DEFAULT: 1)\n\
 \t  -t #   \t\t THE TARGET DIFFICULTY AS A POSITIVE NON-ZERO INTEGER (DEFAULT: 1)\n\
-\t  -diff #   \t\t STARTING DIFFICULTY REDUCTION AS A POSITIVE INTEGER [0 NORMAL, 3 MAXIMUM] (DEFAULT: 1)\n", argv[0]);
+\t  -diff #   \t\t STARTING DIFFICULTY MODIFIER AS AN INTEGER, HIGHER VALUES ARE MORE DIFFICULT [-3 MINIMUM, 0 NORMAL, 26 MAXIMUM] (DEFAULT: -1)\n", argv[0]);
   }
   // RUN THE SELECTED IMPLEMENTATION(S)
   else{
@@ -991,6 +1007,7 @@ if(errFile = fopen(error_filename, "w")){
         cudaEventCreate(&diff_t2[i]);
         allocMiningMemory(&target_h[i], &target_d[i], &nonce_h[i], &nonce_d[i], &flag_d[i]);
         getDifficulty(block_h[i], &target_h[i], &target_length[i], &difficulty[i], i+1);
+				setMiningDifficulty(&(streams[i]), block_h[i], i+1);
     }
 /*------------------------------------------------------------------------*/
 /**************************************************************************/
@@ -1064,13 +1081,13 @@ if(errFile = fopen(error_filename, "w")){
           cudaEventCreate(&buff_p2);
           allocMiningMemory(&ptarget_h, &ptarget_d, &pnonce_h, &pnonce_d, &pflag_d);
           getDifficulty(pBlock_h, &ptarget_h, &ptarget_length, &pdifficulty, 0);
+					setMiningDifficulty(&pStream, pBlock_h, 0);
           cudaMemcpyAsync(ptarget_d, ptarget_h, HASH_SIZE, cudaMemcpyHostToDevice, pStream);
     }
 /*-------------------------FLAG INITIALIZATION----------------------------*/
-    BYTE * time_h;
-    BYTE * time_d;
+    WORD * time_h;
     cudaStream_t tStream;
-    initTime(&tStream, &time_h, &time_d);
+    initTime(&tStream, &time_h);
 
     flag_h = (int *)malloc(sizeof(int));
     flag_h[0] = 0;
@@ -1095,7 +1112,7 @@ cudaEventRecord(g_time[0], g_timeStream);
         cudaEventRecord(diff_t2[i], streams[i]);
         cudaEventRecord(diff_t1[i], streams[i]);
         cudaMemcpyAsync(target_d[i], target_h[i], HASH_SIZE, cudaMemcpyHostToDevice, streams[i]);
-        launchMiner(MAX_BLOCKS/num_workers, &streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i], &target_d[i], &time_d, &flag_d[i], flag_h, &target_length[i]);
+        launchMiner(i+1, &streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i], &target_d[i], &flag_d[i], flag_h, &target_length[i]);
         // SET EVENT TO RECORD AFTER KERNEL COMPLETION
         cudaEventRecord(t2[i], streams[i]);
     }
@@ -1110,7 +1127,7 @@ cudaEventRecord(g_time[0], g_timeStream);
     /********************************************BEGIN MINING UNTIL TARGET BLOCKS ARE FOUND********************************************/
     int block_total = 0;
     while(block_total < TARGET_BLOCKS || PROC_REMAINING != 0){
-      updateTime(&tStream, time_h, time_d);
+      updateTime(&tStream, time_h);
       if(MINING_PROGRESS == 1){
         mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
       }
@@ -1152,7 +1169,7 @@ cudaEventRecord(g_time[0], g_timeStream);
 	                }
 	                // WAIT FOR PARENT TO FINISH, THEN RETRIEVE RESULTS
 	                while(cudaStreamQuery(pStream) != 0){
-	                  updateTime(&tStream, time_h, time_d);
+	                  updateTime(&tStream, time_h);
 	                  if(MINING_PROGRESS == 1){
 	                    mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
 	                  }
@@ -1227,6 +1244,7 @@ cudaEventRecord(g_time[0], g_timeStream);
 	            if(FLAG_TARGET == 0){
 	              updateDifficulty(block_h[i], diff_level[i]);
 	              getDifficulty(block_h[i], &target_h[i], &target_length[i], &difficulty[i], i+1);
+								setMiningDifficulty(&(streams[i]), block_h[i], i+1);
 	              cudaMemcpyAsync(target_d[i], target_h[i], HASH_SIZE, cudaMemcpyHostToDevice, streams[i]);
 	              cudaEventRecord(diff_t1[i], streams[i]);
 	              diff_level[i]++;
@@ -1243,7 +1261,7 @@ cudaEventRecord(g_time[0], g_timeStream);
 	            }
 	            logStart(i, chain_blocks[i]+1, hash_h[i]);
 	            cudaEventRecord(t1[i], streams[i]);
-	            launchMiner(MAX_BLOCKS/num_workers, &streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i], &target_d[i], &time_d, &flag_d[i], flag_h, &target_length[i]);
+	            launchMiner(i+1, &streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i], &target_d[i],  &flag_d[i], flag_h, &target_length[i]);
 	            cudaEventRecord(t2[i], streams[i]);
 	          } else{ // EXECUTION COMPLETED, DELETE CUDA VARS TO PREVENT ADDITIONAL ENTRY INTO THIS CASE
 							destroyCudaVars(&t1[i], &t2[i], &streams[i]);
@@ -1285,6 +1303,7 @@ cudaEventRecord(g_time[0], g_timeStream);
 
             updateDifficulty(pBlock_h, pdiff_level);
             getDifficulty(pBlock_h, &ptarget_h, &ptarget_length, &pdifficulty, 0);
+						setMiningDifficulty(&pStream, pBlock_h, 0);
             cudaMemcpyAsync(ptarget_d, ptarget_h, HASH_SIZE, cudaMemcpyHostToDevice, pStream);
             cudaEventRecord(diff_p1, pStream);
             pdiff_level++;
@@ -1310,7 +1329,7 @@ cudaEventRecord(g_time[0], g_timeStream);
           cudaEventRecord(buff_p1, pStream);
 
           logStart(-1, pchain_blocks+1, pRoot_h);
-          launchMiner(4, &pStream, &pBlock_d,  &pHash_out_d, &pnonce_d, &pBlock_h,  &pHash_out_h, &pnonce_h, &ptarget_d, &time_d, &pflag_d, flag_h, &ptarget_length);
+          launchMiner(0, &pStream, &pBlock_d,  &pHash_out_d, &pnonce_d, &pBlock_h,  &pHash_out_h, &pnonce_h, &ptarget_d, &pflag_d, flag_h, &ptarget_length);
           cudaEventRecord(p2, pStream);
           pbuffer_blocks = 0;
           parentFlag = 1;
@@ -1318,7 +1337,7 @@ cudaEventRecord(g_time[0], g_timeStream);
           // FINAL ITERATION, WAIT FOR PARENT STREAM TO FINISH
           if(PROC_REMAINING == 1){
             while(cudaStreamQuery(pStream) != 0){
-              updateTime(&tStream, time_h, time_d);
+              updateTime(&tStream, time_h);
               if(MINING_PROGRESS == 1){
                 mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
               }
@@ -1364,7 +1383,7 @@ cudaEventRecord(g_time[0], g_timeStream);
     /*******************************************************FREE MINING VARIABLES******************************************************/
     printDebug((const char*)"FREEING MINING MEMORY");
     free(flag_h);
-    freeTime(&tStream, &time_h, &time_d);
+    freeTime(&tStream, &time_h);
     if(multilevel == 1){
       freeMiningMemory(&ptarget_h, &ptarget_d, &pnonce_h, &pnonce_d, &pflag_d);
     }
@@ -1759,10 +1778,10 @@ __host__ void testMiningHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h,
 	test_h[75] = 0xff;
 
 	WORD * target_h;
-	target_h = (WORD*)malloc(TARGET_SIZE);
+	target_h = (WORD*)malloc(TARGET_C_SIZE);
 	getMiningDifficulty(test_h, &target_h, &t_target_length, &t_difficulty, 0);
 	printf("TARGET: %08x%08x%08x%08x%08x%08x%08x%08x\n\n", target_h[0], target_h[1], target_h[2], target_h[3], target_h[4], target_h[5], target_h[6], target_h[7]);
-	cudaMemcpyToSymbolAsync(test_target_c, target_h, TARGET_SIZE, 0, cudaMemcpyHostToDevice, test_stream);
+	cudaMemcpyToSymbolAsync(test_target_c, target_h, TARGET_C_SIZE, 0, cudaMemcpyHostToDevice, test_stream);
 
 	// ADD NAME TO STREAM
 	char stream_name[50];
@@ -1775,10 +1794,8 @@ __host__ void testMiningHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h,
 	encodeHex(test_str, test_h, test_size*2);
 
 	cudaMemcpyAsync(test_d, test_h, BLOCK_SIZE, cudaMemcpyHostToDevice, test_stream);
-	//cudaMemcpyAsync(t_target_d, t_target_h, TARGET_SIZE, cudaMemcpyHostToDevice, test_stream);
 
-	WORD * basemsg_h;
-	basemsg_h = (WORD *)malloc(sizeof(WORD)*16);
+	WORD basemsg_h[16];
 	// SET SYMBOL FOR BASE BLOCK
 	for(int i = 0; i < 16; i++){
 		basemsg_h[i] = (test_h[i*4] << 24) | (test_h[i*4+1] << 16) | (test_h[i*4+2] << 8) | (test_h[i*4+3]);
@@ -1805,7 +1822,6 @@ __host__ void testMiningHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h,
 	cudaFree(success_d);
 
 	free(target_h);
-	free(basemsg_h);
 
 	return;
 }
@@ -1844,7 +1860,7 @@ __host__ void hostBenchmarkTest(int num_workers){
 
   cudaEventRecord(bench_s, bench_stream);
   cudaMemcpyAsync(test_block_d, test_block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, bench_stream);
-  benchmarkKernel<<<MAX_BLOCKS/num_workers, NUM_THREADS, 0, bench_stream>>>(test_block_d);
+  benchmarkKernel<<<WORKER_BLOCKS, NUM_THREADS, 0, bench_stream>>>(test_block_d);
   cudaEventRecord(bench_f, bench_stream);
 
   cudaDeviceSynchronize();
@@ -1853,7 +1869,7 @@ __host__ void hostBenchmarkTest(int num_workers){
   cudaEventElapsedTime(&bench_time, bench_s, bench_f);
 
   worker_time = 0xEFFFFFFF/(bench_time/1000);
-  block_time = worker_time/(MAX_BLOCKS/num_workers);
+  block_time = worker_time/WORKER_BLOCKS;
   thread_time = block_time/NUM_THREADS;
 
   sprintf(logResult, "\n/****************************BENCHMARK ANALYSIS FOR %i WORKER CHAINS****************************/\n\
@@ -1888,7 +1904,8 @@ __host__ void miningBenchmarkTest(int num_workers){
 	double t_difficulty;
 	int t_target_length;
   char logResult[1000];
-  float bench_time, worker_time, block_time, thread_time;
+  float bench_time;
+	float worker_time, block_time, thread_time;
   cudaEvent_t bench_s, bench_f;
   cudaStream_t bench_stream;
 
@@ -1911,58 +1928,89 @@ __host__ void miningBenchmarkTest(int num_workers){
 	test_hash_h = (BYTE *)malloc(HASH_SIZE);
 	cudaMalloc((void **) &test_hash_d, HASH_SIZE);
 
-  // CREATE RANDOM TEST BLOCK
-  srand(time(0));
-  for(int i = 0; i < 80; i++){
-      test_block_h[i] = (rand() % 255) & 0xFF;
-  }
-	// SET HIGH DIFFICULTY
-	test_block_h[72] = 0x1c;
+	// INITIALIZE CONSTANTS FOR USE IN THE MINING KERNEL
+	WORD * target_h;
+	target_h = (WORD*)malloc(TARGET_C_SIZE);
+	WORD * basemsg_h;
+	basemsg_h = (WORD *)malloc(BLOCK_C_SIZE);
+	int * test_flag;
+	cudaMalloc((void **) &test_flag, sizeof(int));
+
+
+	int * iterations_h;
+	int total_iterations = 0;
+	iterations_h = (int*)malloc(sizeof(int));
+	int * iterations_d;
+	cudaMalloc((void **) &iterations_d, sizeof(int));
+	WORD * time_h;
+	cudaStream_t tStream;
+	initTime(&tStream, &time_h);
+
+	cudaEventRecord(bench_s, bench_stream);
+
+	// SET TARGET DIFFICULTY
+	test_block_h[72] = 0x1d;
 	test_block_h[73] = 0x00;
 	test_block_h[74] = 0xff;
 	test_block_h[75] = 0xff;
-
-  cudaEventRecord(bench_s, bench_stream);
-  cudaMemcpyAsync(test_block_d, test_block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, bench_stream);
-
-	// INITIALIZE CONSTANTS FOR USE IN THE MINING KERNEL
-	WORD * target_h;
-	target_h = (WORD*)malloc(TARGET_SIZE);
-	WORD * basemsg_h;
-	basemsg_h = (WORD *)malloc(sizeof(WORD)*16);
-
 	getMiningDifficulty(test_block_h, &target_h, &t_target_length, &t_difficulty, 0);
-	cudaMemcpyToSymbolAsync(test_target_c, target_h, TARGET_SIZE, 0, cudaMemcpyHostToDevice, bench_stream);
+	cudaMemcpyToSymbolAsync(test_target_c, target_h, TARGET_C_SIZE, 0, cudaMemcpyHostToDevice, bench_stream);
+	srand(time(0));
+	for(int j = 0; j < 10; j++){
+		// CREATE RANDOM TEST BLOCK
+	  for(int i = 0; i < 80; i++){
+	      test_block_h[i] = (rand() % 255) & 0xFF;
+	  }
+		cudaMemcpyAsync(test_block_d, test_block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, bench_stream);
 
-	// INITIALIZE MESSAGE SCHEDULE WITH CONSTANT BASE BLOCK, NO EXTRA REGISTERS USED!!
-	for(int i = 0; i < 16; i++){
-		basemsg_h[i] = (test_block_h[i*4] << 24) | (test_block_h[i*4+1] << 16) | (test_block_h[i*4+2] << 8) | (test_block_h[i*4+3]);
+		// INITIALIZE MESSAGE SCHEDULE WITH CONSTANT BASE BLOCK, NO EXTRA REGISTERS USED!!
+		for(int i = 0; i < 16; i++){
+			basemsg_h[i] = (test_block_h[i*4] << 24) | (test_block_h[i*4+1] << 16) | (test_block_h[i*4+2] << 8) | (test_block_h[i*4+3]);
+		}
+		cudaMemcpyToSymbolAsync(test_basemsg_c, basemsg_h, BLOCK_C_SIZE, 0, cudaMemcpyHostToDevice, bench_stream);
+		cudaMemset(test_flag, 0, sizeof(int));
+		cudaMemset(iterations_d, 0, sizeof(int));
+
+	  miningBenchmarkKernel<<<WORKER_BLOCKS, NUM_THREADS, 0, bench_stream>>>(test_block_d, test_hash_d, test_flag, iterations_d);
+
+		// UPDATE TIMING VARIABLE
+		while(cudaStreamQuery(bench_stream) != 0){
+			updateTime(&tStream, time_h);
+		}
+
+		cudaMemcpyAsync(iterations_h, iterations_d, sizeof(int), cudaMemcpyDeviceToHost, bench_stream);
+		cudaMemcpyAsync(test_block_h, test_block_d, BLOCK_SIZE, cudaMemcpyDeviceToHost, bench_stream);
+		cudaMemcpyAsync(test_hash_h, test_hash_d, HASH_SIZE, cudaMemcpyDeviceToHost, bench_stream);
+		total_iterations += *iterations_h;
+		printf("FINSHED BLOCK %i IN %i ITERATIONS! \n HASH: ", j, *iterations_h);
+		printHex(test_hash_h, 32);
+		printf("\n\n");
 	}
-	cudaMemcpyToSymbolAsync(test_basemsg_c, basemsg_h, sizeof(WORD)*16, 0, cudaMemcpyHostToDevice, bench_stream);
 
-	// Copy to symbols
-//	cudaMemcpyToSymbolAsync(test_unique_c, &(test_block_h[64]), sizeof(BYTE)*16, 0, cudaMemcpyHostToDevice, bench_stream);
-
-  miningBenchmarkKernel<<<MAX_BLOCKS/num_workers, NUM_THREADS, 0, bench_stream>>>(test_block_d, test_hash_d);
-
-  cudaEventRecord(bench_f, bench_stream);
-	cudaMemcpyAsync(test_block_h, test_block_d, BLOCK_SIZE, cudaMemcpyDeviceToHost, bench_stream);
-	cudaMemcpyAsync(test_hash_h, test_hash_d, HASH_SIZE, cudaMemcpyDeviceToHost, bench_stream);
-
+	cudaEventRecord(bench_f, bench_stream);
   cudaDeviceSynchronize();
 	POP_DOMAIN(handle);
 
-  cudaEventElapsedTime(&bench_time, bench_s, bench_f);
+	freeTime(&tStream, &time_h);
 
-  worker_time = 0xEFFFFFFF/(bench_time/1000);
-  block_time = worker_time/(MAX_BLOCKS/num_workers);
-  thread_time = block_time/NUM_THREADS;
+  cudaEventElapsedTime(&bench_time, bench_s, bench_f);
+	printf("TOTAL ITERATIONS PASSED: %i\n", total_iterations);
+	printf("WORKER_BLOCKS: %i\n", WORKER_BLOCKS);
+	printf("NUM THREADS: %i\n\n", NUM_THREADS);
+
+	long long int all_iterations = 0;
+	all_iterations = ((long long int)total_iterations)*((long long int)WORKER_BLOCKS)*((long long int)NUM_THREADS);
+	printf("ALL ITERATIONS: %lld \n", all_iterations);
+
+  worker_time = ((all_iterations)/(bench_time*1000));
+  block_time = worker_time/WORKER_BLOCKS;
+  thread_time = (block_time*1000)/NUM_THREADS;
 
   sprintf(logResult, "\n/****************************NEW MINING BENCHMARK ANALYSIS FOR %i WORKER CHAINS****************************/\n\
   TOTAL TIME: %f\n\
-  WORKER HASHES PER SECOND: %f\n\
-  BLOCK HASHES PER SECOND: %f \n\
-  THREAD HASHES PER SECOND: %f \n\
+  WORKER HASHRATE:\t %.3f MH/s\n\
+  BLOCK HASHRATE:\t %.3f MH/s\n\
+  THREAD HASHRATE:\t %.3f KH/s\n\
   /**********************************************************************************************/\n\
   ", num_workers, bench_time, worker_time, block_time, thread_time);
   printLog(logResult);
@@ -1975,6 +2023,9 @@ __host__ void miningBenchmarkTest(int num_workers){
   cudaFree(test_block_d);
 	free(test_hash_h);
 	cudaFree(test_hash_d);
+	free(iterations_h);
+	cudaFree(iterations_d);
+	cudaFree(test_flag);
 
 	free(target_h);
 	free(basemsg_h);
@@ -2094,7 +2145,8 @@ __host__ void freeFileStrings(char ** str, int num_workers){
 __host__ void createCudaVars(cudaEvent_t * timing1, cudaEvent_t * timing2, cudaStream_t * stream){
   cudaEventCreate(timing1);
   cudaEventCreate(timing2);
-  cudaStreamCreate(stream);
+//  cudaStreamCreate(stream);
+	cudaStreamCreateWithPriority(stream, cudaStreamNonBlocking, 2); //Create the stream such that it may run concurrently with the default stream, lower priority than timing stream
 }
 __host__ void destroyCudaVars(cudaEvent_t * timing1, cudaEvent_t * timing2, cudaStream_t * stream){
   cudaEventDestroy(*timing1);
@@ -2105,15 +2157,13 @@ __host__ void destroyCudaVars(cudaEvent_t * timing1, cudaEvent_t * timing2, cuda
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /************************************************************************TIME MANAGEMENT FUNCTIONS**************************************************************************/
 // CREATE AND FREE FUNCTIONS FOR UPDATING THE DEVICE TIME
-__host__ void initTime(cudaStream_t * tStream, BYTE ** time_h, BYTE ** time_d){
-  *time_h = (BYTE *)malloc(4*sizeof(BYTE));
-  cudaMalloc((void **) time_d, 4*sizeof(BYTE));
-  cudaStreamCreate(tStream);
-  updateTime(tStream, *time_h, *time_d);
+__host__ void initTime(cudaStream_t * tStream, WORD ** time_h){
+  *time_h = (WORD *)malloc(sizeof(WORD));
+  cudaStreamCreateWithPriority(tStream, cudaStreamNonBlocking, 0); // HIGHEST PRIORITY STREAM
+  updateTime(tStream, *time_h);
 }
-__host__ void freeTime(cudaStream_t * tStream, BYTE ** time_h, BYTE ** time_d){
+__host__ void freeTime(cudaStream_t * tStream, WORD ** time_h){
   free(*time_h);
-  cudaFree(*time_d);
   cudaStreamDestroy(*tStream);
 }
 
@@ -2242,11 +2292,16 @@ __host__ void updateDifficulty(BYTE * block_h, int diff_level){
   block_h[75] = new_diff;
 }
 // UPDATE THE CURRENT TIME ON DEVICE IN CASE OF NONCE OVERFLOW
-__host__ void updateTime(cudaStream_t * tStream, BYTE * time_h, BYTE * time_d){
-	BYTE old_time = time_h[3];
-  getTime(time_h);
-	if(old_time != time_h[3]){ // Time has changed, update device memory
-  	cudaMemcpyAsync(time_d, time_h, 4*sizeof(BYTE), cudaMemcpyHostToDevice, *tStream);
+__host__ void updateTime(cudaStream_t * tStream, WORD * time_h){
+	WORD old_time = *time_h;
+	*time_h = time(0);
+//  getTime(time_h);
+	if(old_time != *time_h){ // Time has changed, update device memory
+//		printf("UPDATING...");
+		cudaMemcpyToSymbolAsync(time_const, time_h, sizeof(WORD), 0, cudaMemcpyHostToDevice, *tStream);
+//		cudaMemcpyToSymbol(time_const, time_h, sizeof(WORD), 0, cudaMemcpyHostToDevice);
+///  	cudaMemcpyAsync(time_d, time_h, 4*sizeof(BYTE), cudaMemcpyHostToDevice, *tStream);
+//		printf("HOST TIME UPDATED: %08x\n", *time_h);
 	}
 }
 
@@ -2303,6 +2358,18 @@ __host__ void getMiningDifficulty(BYTE * block_h, WORD ** target, int * target_l
   printDebug((const char*)debugOut);
 	free(target_bytes);
 }
+
+__host__ void setMiningDifficulty(cudaStream_t * stream, BYTE * block_h, int worker_num){
+	WORD target[8];
+
+	BYTE target_bytes[32];
+  BYTE block_target[] = {block_h[72], block_h[73], block_h[74], block_h[75]};
+
+  calculateMiningTarget(block_target, target_bytes, target);
+  calculateDifficulty(block_target);
+
+	cudaMemcpyToSymbolAsync(target_const, target, TARGET_C_SIZE, TARGET_C_SIZE*worker_num, cudaMemcpyHostToDevice, *stream);
+}
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /************************************************************************MINING CALCULATION FUNCTIONS***********************************************************************/
 // GET THE MINING DIFFICULTY FROM THE GIVEN BITS, RETURN DIFFICULTY AS A DOUBLE
@@ -2320,7 +2387,7 @@ __host__ double calculateDifficulty(BYTE * bits){
 __host__ int calculateTarget(BYTE * bits, BYTE * target){
   // FIRST BYTE DETERMINES LEADING ZEROS
   // DIFFICULTY MODIFIED TO REDUCE INITIAL COMPUTATION TIME
-  int padding = (32 - bits[0])-DIFF_REDUCE;
+  int padding = (32 - bits[0])+DIFF_REDUCE;
   int length = (padding + 3);
   for(int i = 0; i < 32; i++){
     if(i < padding){
@@ -2339,7 +2406,7 @@ __host__ int calculateTarget(BYTE * bits, BYTE * target){
 __host__ int calculateMiningTarget(BYTE * bits, BYTE * target_bytes, WORD * target){
   // FIRST BYTE DETERMINES TRAILING ZEROS
   // DIFFICULTY MODIFIED TO REDUCE INITIAL COMPUTATION TIME
-  int padding = (32 - bits[0])-DIFF_REDUCE;
+  int padding = (32 - bits[0])+DIFF_REDUCE;
   int length = (padding + 3);
 	BYTE reverse_bits[3];
 	reverse_bits[0] = bits[3];
@@ -2395,15 +2462,32 @@ __host__ void launchMerkle(cudaStream_t * stream, BYTE ** merkle_d, BYTE ** root
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /*******************************************************************************MINING KERNEL*******************************************************************************/
 // LAUNCH MINER KERNEL ON AN INDEPENDENT STREAM USING THE SPECIFIED NUMBER OF BLOCKS
-__host__ void launchMiner(int num_blocks, cudaStream_t * stream, BYTE ** block_d, BYTE ** hash_d, BYTE ** nonce_d, BYTE ** block_h, BYTE ** hash_h, BYTE ** nonce_h, BYTE ** target_d, BYTE ** time_d, int ** flag_d,  int * flag_h, int * target_length){
-//  printf("STARTING MINER MEMORY TRANSFER!\n");
+__host__ void launchMiner(int kernel_id, cudaStream_t * stream, BYTE ** block_d, BYTE ** hash_d, BYTE ** nonce_d, BYTE ** block_h, BYTE ** hash_h, BYTE ** nonce_h, BYTE ** target_d, int ** flag_d,  int * flag_h, int * target_length){
+	int num_blocks = (kernel_id == 0) ? PARENT_BLOCKS:WORKER_BLOCKS;
   cudaMemcpyAsync(*block_d, *block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, *stream);
   cudaMemcpyAsync(*flag_d, flag_h, sizeof(int), cudaMemcpyHostToDevice, *stream);
-//  printf("STARTING MINER WITH %i BLOCKS AND %i THREADS!!!\n", num_blocks, NUM_THREADS);
-  minerKernel<<<num_blocks,NUM_THREADS, 0, *stream>>>(*block_d, *hash_d, *nonce_d, *target_d, *time_d, *flag_d, *target_length, MAX_BLOCKS);
-//  cudaTest<<<num_blocks, NUM_THREADS>>>();
-//  cudaDeviceSynchronize();
-//  printf("FINISHED MINER!\n");
+
+	// CONSTANT MEMORY UPDATES FOR IMPROVED EFFICIENCY
+	//FIXME Move mining difficulty elsewhere, may be best to load constant when updating difficulty
+
+	WORD basemsg_hw[16];
+	//basemsg_hw = (WORD *)malloc(sizeof(WORD)*16);
+
+	// INITIALIZE MESSAGE SCHEDULE WITH CONSTANT BASE BLOCK, NO EXTRA REGISTERS USED!!
+	for(int i = 0; i < 16; i++){
+		basemsg_hw[i] = ((*block_h)[i*4] << 24) | ((*block_h)[i*4+1] << 16) | ((*block_h)[i*4+2] << 8) | ((*block_h)[i*4+3]);
+	}
+//	cudaMemcpyToSymbolAsync(block_const, basemsg_hw, sizeof(WORD)*16, kernel_id*16, cudaMemcpyHostToDevice, *stream);
+	cudaMemcpyToSymbolAsync(block_const, basemsg_hw, BLOCK_C_SIZE, BLOCK_C_SIZE*kernel_id, cudaMemcpyHostToDevice, *stream);
+//	free(basemsg_hw);
+	WORD * block_ptr;
+	cudaGetSymbolAddress((void**) &block_ptr, block_const);
+	int block_offset = kernel_id*16;
+	int target_offset = kernel_id*8;
+
+//  minerKernel<<<num_blocks,NUM_THREADS, 0, *stream>>>(*block_d, *hash_d, *nonce_d, *target_d, *flag_d, *target_length);
+
+	minerKernel_new<<<num_blocks,NUM_THREADS, 0, *stream>>>(*block_d, *hash_d, *nonce_d, *flag_d, block_offset, target_offset);
 }
 // LOAD MINER RESULTS BACK FROM THE GPU USING ASYNCHRONOUS STREAMING
 __host__ void returnMiner(cudaStream_t * stream, BYTE ** block_d, BYTE ** hash_d, BYTE ** nonce_d, BYTE ** block_h, BYTE ** hash_h, BYTE ** nonce_h){
@@ -2924,14 +3008,15 @@ __global__ void benchmarkKernel(BYTE * block_d){
 
 // BENCHMARK NEW SHA256 FUNCTION
 // TODO ADD MORE ITERATIONS WITH TIMING TO INCREASE ACCURACY
-__global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d){
+__global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d, int * flag_d, int * total_iterations){
 	  int success = 0, i = 0, j=0;
 	  unsigned int nonce = 0x00000000;
 		unsigned int iteration = 0;
 		unsigned int threadId = threadIdx.x;
 		unsigned int inc_size = blockDim.x * gridDim.x;
+		unsigned int idx = threadId + blockIdx.x * blockDim.x;
 
-		nonce += threadId + blockIdx.x * blockDim.x;
+		nonce += idx;
 		unsigned int max_iteration = 0xffffffff / inc_size;
 
 		// THREADS SHARE FIRST 64 BYTES, SET IN CONSTANT MEMORY
@@ -2946,20 +3031,27 @@ __global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d){
 		unique_ptr[2] = (block_d[72] << 24) | (block_d[73] << 16) | (block_d[74] << 8) | (block_d[75]);
 		unique_ptr[3] = (block_d[76] << 24) | (block_d[77] << 16) | (block_d[78] << 8) | (block_d[79]);
 
-		while(nonce < 0xEFFFFFFF){
+		while(flag_d[0] == 0){
+//		while(nonce < 0xEFFFFFFF){
 			if(iteration < max_iteration){
 				iteration++;
 			}else{ // UPDATE TIME
+				if(idx == 0){
+					printf("NEW TIME %08x\n\n", time_const);
+					*total_iterations += iteration;
+				}
 				iteration = 0;
+				unique_ptr[1] = time_const;
 			}
 
 			unique_ptr[3] = nonce;
 			success = sha256_blockHash_TEST(unique_ptr, hash_d, test_basemsg_c, test_target_c);
-			nonce += inc_size;
+
 
 			if(success == 0){
-				// ONLY HERE FOR BRANCH PREDICTION SPEEDUP
+				nonce += inc_size;
 			}else{
+				flag_d[0] = 1;
 				for(i = 0, j = 64; i < 4; i++, j+=4){
 					block_d[j] = (unique_ptr[i] >> 24) & 0x000000FF;
 					block_d[j+1] = (unique_ptr[i] >> 16) & 0x000000FF;
@@ -2969,6 +3061,9 @@ __global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d){
 				break;
 			}
 	  } // END WHILE LOOP
+		if(idx == 0){
+			*total_iterations += iteration;
+		}
 }
 
 __global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size){
@@ -3014,7 +3109,7 @@ __global__ void genTestHashes(BYTE * hash_df, BYTE * seed, int num_blocks){
   sha256_final(&ctx, &hash_df[offset]);
 }
 
-__global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE * target, BYTE * time_d, int * flag_d, int compare, int num_blocks){
+__global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE * target, int * flag_d, int compare){
   int success = 0;
 
   unsigned int nonce = 0x00000000;
@@ -3022,7 +3117,7 @@ __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE 
   unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
 
   SHA256_CTX thread_ctx;
-  int inc_size = blockDim.x * num_blocks;
+  int inc_size = blockDim.x * gridDim.x;
   int max_iteration = 0xffffffff / inc_size;
   nonce += idx;
 
@@ -3071,12 +3166,18 @@ __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE 
       iteration++;
     }else{ // UPDATE TIME
       iteration = 0;
+			uniqueBlock[4] = (BYTE)(time_const >> 24) & 0xFF;
+			uniqueBlock[5] = (BYTE)(time_const >> 16) & 0xFF;
+			uniqueBlock[6] = (BYTE)(time_const >> 8) & 0xFF;
+			uniqueBlock[7] = (BYTE)(time_const & 0xFF);
+			/*
       uniqueBlock[4] = time_d[0];
       uniqueBlock[5] = time_d[1];
       uniqueBlock[6] = time_d[2];
       uniqueBlock[7] = time_d[3];
+*/
 			if(idx == 0){
-        printf("NEW TIME %02x%02x%02x%02x\n\n", time_d[0], time_d[1], time_d[2], time_d[3]);
+        printf("NEW TIME %08x\n\n", time_const);
       }
     }
 
@@ -3119,6 +3220,67 @@ __global__ void minerKernel(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, BYTE 
     }
   }
 }
+
+
+__global__ void minerKernel_new(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, int * flag_d, int block_offset, int target_offset){
+	int success = 0, i = 0, j = 0;
+	unsigned int nonce = 0x00000000;
+	unsigned int iteration = 0;
+	unsigned int threadId = threadIdx.x;
+	unsigned int inc_size = blockDim.x * gridDim.x;
+	unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+	// POINTERS TO BLOCK AND TARGET CONSTANTS
+	WORD * block_ptr = &(block_const[block_offset]);
+	WORD * target_ptr = &(target_const[target_offset]);
+
+	nonce += idx;
+	unsigned int max_iteration = 0xffffffff / inc_size;
+
+	// THREADS SHARE FIRST 64 BYTES, SET IN CONSTANT MEMORY
+	// EACH THREAD HAS ITS OWN VARIABLE FOR TOP 16 BYTES
+	// ALLOCATED ON SHARED MEMORY TO FREE UP REGISTER USAGE FOR HASHING
+	__shared__ WORD uniqueBlock[4096];
+	WORD * unique_ptr = &(uniqueBlock[threadId*4]);
+
+	// COMPUTE UNIQUE PORTION OF THE BLOCK HERE INSTEAD OF INSIDE THE LOOP FOR SPEEDUP
+	unique_ptr[0] = (block_d[64] << 24) | (block_d[65] << 16) | (block_d[66] << 8) | (block_d[67]);  	// END OF PREVIOUS HASH (CONSTANT)
+	unique_ptr[1] = (block_d[68] << 24) | (block_d[69] << 16) | (block_d[70] << 8) | (block_d[71]); 	// CURRENT TIME ON THE BLOCK (UPDATED WHEN ALL NONCES ARE TRIED)
+	unique_ptr[2] = (block_d[72] << 24) | (block_d[73] << 16) | (block_d[74] << 8) | (block_d[75]);		// BLOCK DIFFICULTY (CONSTANT)
+	unique_ptr[3] = (block_d[76] << 24) | (block_d[77] << 16) | (block_d[78] << 8) | (block_d[79]);		// NONCE (UNIQUE PER THREAD, UPDATED EACH ITERATION)
+
+  while(flag_d[0] == 0){
+    if(iteration < max_iteration){
+      iteration++;
+    }else{ // UPDATE TIME
+      iteration = 0;
+			unique_ptr[1] = time_const;
+			if(idx == 0){
+        printf("NEW TIME %08x\n\n", time_const);
+      }
+    }
+
+		unique_ptr[3] = nonce;
+		success = sha256_blockHash_TEST(unique_ptr, hash_d, block_ptr, target_ptr);
+
+    if(success == 0){
+			nonce += inc_size;
+    }else{
+      flag_d[0] = 1;
+			nonce_f[0] = (unique_ptr[3] >> 24) & 0x000000FF;
+			nonce_f[1] = (unique_ptr[3] >> 16) & 0x000000FF;
+			nonce_f[2] = (unique_ptr[3] >> 8) & 0x000000FF;
+			nonce_f[3] = (unique_ptr[3]) & 0x000000FF;
+			for(i = 0, j = 64; i < 4; i++, j+=4){
+				block_d[j] = (unique_ptr[i] >> 24) & 0x000000FF;
+				block_d[j+1] = (unique_ptr[i] >> 16) & 0x000000FF;
+				block_d[j+2] = (unique_ptr[i] >> 8) & 0x000000FF;
+				block_d[j+3] = (unique_ptr[i]) & 0x000000FF;
+			}
+      break;
+    }
+  }
+}  // end new kernel
 
 __global__ void getMerkleRoot(BYTE * pHash_d, BYTE * pRoot_d, int buffer_blocks){
   SHA256_CTX ctx;
