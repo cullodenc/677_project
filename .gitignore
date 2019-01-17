@@ -6,3 +6,5 @@ cuda_miner
 !cuda_miner.cu
 src/openmp
 notes
+backups
+tests

@@ -384,11 +384,37 @@ int TEST_COUNT = 0;
 // INCLUDE PROFILER FUNCTIONS IF USE_NVTX IS ENABLED IN NVCC COMPILE
 #ifdef USE_NVTX
 	// PROFILER COLOR DEFINITIONS
-	const uint32_t colors[] = { 0xff00ff00, 0xff0000ff, 0xffffff00, 0xffff00ff, 0xff00ffff, 0xffff0000, 0xffffffff };
-	const int num_colors = sizeof(colors)/sizeof(uint32_t);
+
+	const uint32_t colors[4][12] ={
+																//		0 					1						2						3						4						5						6						7						8						9						10					11
+/*GRAYSCALE					(SPECIAL)*/	{ 0xff000000, 0xff101010, 0xff202020, 0xff303030, 0xff404040, 0xff505050, 0xff606060, 0xff707070, 0xff808080, 0xff909090, 0xffa0a0a0, 0xffb0b0b0 },
+/*BRIGHT RAINBOW 		(LEVEL 0)*/	{ 0xffff0000, 0xffff8000, 0xffffe000, 0xffd0ff00, 0xff00ff40, 0xff00ffff, 0xff00b0ff, 0xff0060ff, 0xff0020ff, 0xff8000ff, 0xffff00ff, 0xffff0080 },
+/*DULL RAINBOW 			(LEVEL 0)*/	{ 0xff800000, 0xff804000, 0xff808000, 0xff408000, 0xff008040, 0xff0080a0, 0xff004080, 0xff000080, 0xff400080, 0xff800080, 0xff800040, 0xff800040  },
+																{ 0xffff4080, 0xffff8040, 0xff40ff80, 0xff80ff40, 0xff4080ff, 0xff8040ff, 0xffff4080, 0xffff8040, 0xff40ff80, 0xff80ff40, 0xff4080ff, 0xff8040ff }
+};
+
+// neon
+// pink 		green 		blue   orange
+//ff4080		80ff40   40bfff  ff8040
+
+// order ff4080  ff8040  40ff80 80ff40  4080ff  8040ff
+
+ // TODO SET SPECIAL CASE FOR MINING, DIFFICULTY IS GRAY SCALE, BLOCKS PROCEED FROM A LIGHT SHADE, UP TO DARK
+
+
+	const int num_colors = sizeof(colors[0])/sizeof(uint32_t);	// COLORS PER PALETTE
+	const int num_palettes = sizeof(colors)/(sizeof(uint32_t)*num_colors); 																// TOTAL NUMBER OF COLOR PALETTES
+
+//	const int num_palettes = 4; 			// TOTAL NUMBER OF COLOR PALETTES
+//	const int num_colors = 12;		// COLORS PER PALETTE
+
+	#define NUM_PALETTES num_palettes
+	#define NUM_COLORS num_colors
 
 	// TEST TO SEE IF PROFILING MACRO WAS PASSED IN
 	#define PRINT_MACRO printf("MACRO PASSED SUCCESSFULLY!!\n\n")
+	#define START_PROFILE cudaProfilerStart()
+	#define STOP_PROFILE cudaProfilerStop()
 
 	#define NAME_STREAM(stream, name) { \
 		if(PROFILER == 1){ \
@@ -405,7 +431,7 @@ int TEST_COUNT = 0;
 			eventAttrib.version = NVTX_VERSION; \
 			eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
 			eventAttrib.colorType = NVTX_COLOR_ARGB; \
-			eventAttrib.color = colors[color_id]; \
+			eventAttrib.color = colors[0][color_id]; \
 			eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
 			eventAttrib.message.ascii = name; \
 			nvtxRangePushEx(&eventAttrib); \
@@ -426,17 +452,29 @@ int TEST_COUNT = 0;
 				nvtxDomainDestroy(handle); \
 	}}
 
-	#define PUSH_DOMAIN(handle, name, load, cid) { \
+	// ID specifies color related pattern, send -2 for time, -1 for parent
+	#define PUSH_DOMAIN(handle, name, id, level, cid) { \
 		if(PROFILER == 1){ \
+			int worker_id = id; \
 			int color_id = cid; \
+			int palette_id = level; \
+			worker_id = worker_id%num_colors; \
 			color_id = color_id%num_colors;\
+			palette_id = palette_id%num_palettes; \
+			uint32_t color = colors[palette_id][color_id]; \
+			if(id > -1){			\
+				if(level == 2){   	\
+				/*	color = color ^ ~colors[3][worker_id];		*/								\
+				}												\
+			}							\
+			/*ADD IF STATEMENT HERE FOR ID*/ \
 			nvtxEventAttributes_t eventAttrib = {0}; \
 			eventAttrib.version = NVTX_VERSION; \
 			eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
 			eventAttrib.colorType = NVTX_COLOR_ARGB; \
-			eventAttrib.color = colors[color_id]; \
+			eventAttrib.color = color; \
 			eventAttrib.payloadType = NVTX_PAYLOAD_TYPE_UNSIGNED_INT64; \
-			eventAttrib.payload.llValue = load; \
+			eventAttrib.payload.llValue = level; \
 			eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
 			eventAttrib.message.ascii = name; \
 			nvtxDomainRangePushEx(handle, &eventAttrib); \
@@ -446,13 +484,15 @@ int TEST_COUNT = 0;
 
 #else // EMPTY FUNCTIONS WHEN NVTX IS DISABLED OR UNAVAILABLE
 	#define PRINT_MACRO printf("MACRO WAS NOT PASSED!!\n\n")
+	#define START_PROFILE
+	#define STOP_PROFILE
 	#define NAME_STREAM(stream, name)
 	#define PUSH_RANGE(name,cid)
 	#define POP_RANGE
 	#define DOMAIN_HANDLE int
 	#define DOMAIN_CREATE(handle, name)
 	#define DOMAIN_DESTROY(handle)
-	#define PUSH_DOMAIN(handle, name, load, cid)
+	#define PUSH_DOMAIN(handle, name, id, level, cid)
 	#define POP_DOMAIN(handle)
 #endif
 
@@ -497,7 +537,7 @@ int TEST_COUNT = 0;
 int TARGET_DIFFICULTY = 1;
 
 #define TARGET_BLOCKS DIFFICULTY_LIMIT*TARGET_DIFFICULTY
-//#define TARGET_BLOCKS 32
+//#define TARGET_BLOCKS 2
 
 // INPUTS GENERATED = LOOPS * NUM_THREADS * NUM_BLOCKS
 #define INPUT_LOOPS 25
@@ -546,6 +586,7 @@ __host__ void testHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE 
 __host__ void testMiningHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE * test_d, BYTE * result_h, BYTE * result_d, int test_size, BYTE diff_pow, char ** logStr);
 __host__ void hostBenchmarkTest(int num_workers);
 __host__ void miningBenchmarkTest(int num_workers);
+__host__ void colorTest(int num_colors, int num_palettes);
 
 // TODO ADD TESTING CORES HERE
 /*-----------------------------------------------------------------------------------||------------------------------------------------------------------------------------*/
@@ -582,7 +623,7 @@ __host__  int updateBlock(FILE * inFile, BYTE * block_h, BYTE * hash_h);
 __host__ void updateParentRoot(BYTE * block_h, BYTE * hash_h);
 __host__ void updateParentHash(BYTE * block_h, BYTE * hash_h);
 __host__ void updateDifficulty(BYTE * block_h, int diff_level);
-__host__ void updateTime(cudaStream_t * tStream, WORD * time_h);
+__host__ void updateTime(cudaStream_t * tStream, WORD * time_h, DOMAIN_HANDLE prof_handle);
 /*-----------------------------------------------------------------------------MINING GETTERS------------------------------------------------------------------------------*/
 __host__ void getTime(BYTE * byte_time);
 __host__ void getDifficulty(BYTE * block_h, BYTE ** target, int * target_length, double * difficulty, int worker_num);
@@ -878,6 +919,7 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
     if(test_flag == 1){
       printf("FUNCTIONAL TESTING SELECTED!!!!!\n\n");
       hostFunctionalTest();
+//			colorTest(NUM_COLORS, NUM_PALETTES);
     }
     // RUN BENCHMARK TEST FOR DEVICE PERFORMANCE
     if(bench_flag == 1){
@@ -910,20 +952,35 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 __host__ void hostCoreProcess(int num_workers, int multilevel){
     printf("STARTING%s CORE PROCESS WITH %i WORKERS\n",(multilevel==1 ? " MULTILEVEL": ""), num_workers);
 
+		START_PROFILE;
+		char stream_name[50];
+		// INITIALIZE PROFILING DOMAINS
+		#ifdef USE_NVTX
+			DOMAIN_HANDLE t_handle;
+			DOMAIN_HANDLE p_handle;
+			DOMAIN_HANDLE w_handle[NUM_WORKERS];
+		#else
+			int t_handle = 0;
+		#endif
+
 /*----------------------------GLOBAL TIMING VARIABLES-----------------------------*/
+sprintf(stream_name, "TIME STREAM");
+DOMAIN_CREATE(t_handle, stream_name);
+PUSH_DOMAIN(t_handle, stream_name, -2, 0, 0);		// BLACK LABEL
+
 float total_time[6];
 cudaStream_t g_timeStream;
 cudaEvent_t g_timeStart, g_timeFinish;
 createCudaVars(&g_timeStart, &g_timeFinish, &g_timeStream);
 
-char stream_name[50];
-sprintf(stream_name, "TIME STREAM");
+// ADD NAME TO TIME STREAM
 NAME_STREAM(g_timeStream, stream_name);
 
 cudaEvent_t g_time[4];
 for(int i = 0; i < 4; i++){
   cudaEventCreate(&g_time[i]);
 }
+PUSH_DOMAIN(t_handle, "ALLOC", -2, 2, 0);
 cudaEventRecord(g_timeStart, g_timeStream);
 
 char out_location[30];
@@ -949,12 +1006,15 @@ if(errFile = fopen(error_filename, "w")){
   fprintf(errFile, "ERROR LOG FILE\n\n");
   fclose(errFile);
 }
-
-
 /**********************************************************************************************************************************/
-/*********************************************************WORKER CREATION**********************************************************/
+/********************************************************WORKER ALLOCATION*********************************************************/
 /**********************************************************************************************************************************/
-
+		for(int i = 0; i < num_workers; i++){ // START WORKER DOMAINS AND ALLOCATION PROFILING
+			sprintf(stream_name, "WORKER %i", i);
+			DOMAIN_CREATE(w_handle[i], stream_name);
+			PUSH_DOMAIN(w_handle[i], stream_name, i, 1, i);
+			PUSH_DOMAIN(w_handle[i], "ALLOC", i, 2, 0);
+		}
 /**************************VARIABLE DECLARATIONS**************************/
 /*----------------------------MAIN VARIABLES-----------------------------*/
     BYTE * block_h[num_workers];    // Host storage for current block
@@ -986,36 +1046,29 @@ if(errFile = fopen(error_filename, "w")){
     int errEOF[num_workers];
     int target_length[num_workers];
     double difficulty[num_workers];
-/*-----------------------------------------------------------------------*/
-/******************************INITIALIZATION*****************************/
-/*---------------------------MEMORY ALLOCATION---------------------------*/
-    allocWorkerMemory(num_workers, hash_h, hash_d, block_h, block_d);
-    allocFileStrings(outFiles, num_workers);
-/*-------------------------BLOCK INITIALIZATION--------------------------*/
-    initializeHashes(inFiles, num_workers, hash_h);
-    initializeWorkerBlocks(hash_h, block_h, num_workers);
-    initializeOutputs(outFiles, out_location, num_workers);
-    sprintf(worker_diff_file, "%s/workerDiffScale.txt",out_location);
-/*------------------------THREAD INITIALIZATION---------------------------*/
-    for(int i = 0; i < num_workers; i++){
-        chain_blocks[i] = 0; diff_level[i] = 1; errEOF[i] = 0;
-        createCudaVars(&t1[i], &t2[i], &streams[i]);
-				sprintf(stream_name, "WORKER_%i", i);
-				NAME_STREAM(streams[i], stream_name);
-				live_stream[i] = 1;
-        cudaEventCreate(&diff_t1[i]);
-        cudaEventCreate(&diff_t2[i]);
-        allocMiningMemory(&target_h[i], &target_d[i], &nonce_h[i], &nonce_d[i], &flag_d[i]);
-        getDifficulty(block_h[i], &target_h[i], &target_length[i], &difficulty[i], i+1);
-				setMiningDifficulty(&(streams[i]), block_h[i], i+1);
-    }
+
+	/*---------------------------MEMORY ALLOCATION---------------------------*/
+
+	    allocWorkerMemory(num_workers, hash_h, hash_d, block_h, block_d);
+	    allocFileStrings(outFiles, num_workers);
+			for(int i = 0; i < num_workers; i++){
+				allocMiningMemory(&target_h[i], &target_d[i], &nonce_h[i], &nonce_d[i], &flag_d[i]);
+				POP_DOMAIN(w_handle[i]); // END WORKER ALLOCATION RANGE
+			}
+
 /*------------------------------------------------------------------------*/
 /**************************************************************************/
 
 /**********************************************************************************************************************************/
-/*********************************************************PARENT CREATION**********************************************************/
+/********************************************************PARENT ALLOCATION*********************************************************/
 /**********************************************************************************************************************************/
-
+		if(multilevel == 1){
+			// Profiling functions
+			sprintf(stream_name, "PARENT");
+			DOMAIN_CREATE(p_handle, stream_name);
+			PUSH_DOMAIN(p_handle, stream_name, -1, 0, 8);
+			PUSH_DOMAIN(p_handle, "ALLOC", -1, 2, 0);
+		}
 /**************************VARIABLE DECLARATIONS**************************/
 /*-------------------------MAIN PARENT VARIABLES-------------------------*/
     BYTE * pBlock_h;                // Host storage for current block
@@ -1063,31 +1116,40 @@ if(errFile = fopen(error_filename, "w")){
 /*-----------------------------------------------------------------------*/
 /**************************PARENT INITIALIZATION**************************/
     if(multilevel == 1){
+					createCudaVars(&p1, &p2, &pStream);
+					NAME_STREAM(pStream, stream_name);
       /*---------------------------MEMORY ALLOCATION---------------------------*/
           allocParentMemory(pHash_h, pHash_d, &pBlock_h, &pBlock_d, &pRoot_h, &pRoot_d, &pHash_out_h, &pHash_out_d, &pHash_merkle_h, &pHash_merkle_d);
-      /*-------------------------BLOCK INITIALIZATION--------------------------*/
-          sprintf(bfilename, "outputs/results_%i_pchains/pBlockOutputs.txt",num_workers);
-          sprintf(hfilename, "outputs/results_%i_pchains/pHashOutputs.txt",num_workers);
-          initializeParentBlock(pBlock_h);
-          initializeParentOutputs(bfilename, hfilename);
-      /*------------------------CHAIN INITIALIZATION---------------------------*/
-          createCudaVars(&p1, &p2, &pStream);
-					sprintf(stream_name, "PARENT");
-					NAME_STREAM(pStream, stream_name);
-					live_pstream = 1;
-          cudaEventCreate(&diff_p1);
-          cudaEventCreate(&diff_p2);
-          cudaEventCreate(&buff_p1);
-          cudaEventCreate(&buff_p2);
-          allocMiningMemory(&ptarget_h, &ptarget_d, &pnonce_h, &pnonce_d, &pflag_d);
-          getDifficulty(pBlock_h, &ptarget_h, &ptarget_length, &pdifficulty, 0);
-					setMiningDifficulty(&pStream, pBlock_h, 0);
-          cudaMemcpyAsync(ptarget_d, ptarget_h, HASH_SIZE, cudaMemcpyHostToDevice, pStream);
+					allocMiningMemory(&ptarget_h, &ptarget_d, &pnonce_h, &pnonce_d, &pflag_d);
+					POP_DOMAIN(p_handle);  // POP ALLOC RANGE
     }
+
+/*------------------------------------------------------------------------*/
+/**************************************************************************/
+POP_DOMAIN(t_handle); // END ALLOC RANGE
+
+/**********************************************************************************************************************************/
+/**********************************************************INITIALIZATION**********************************************************/
+/**********************************************************************************************************************************/
+PUSH_DOMAIN(t_handle, "FILES", -2, 2, 1); // START FILE INITIALIZATION RANGE
+
+/*-------------------------BLOCK INITIALIZATION--------------------------*/
+initializeHashes(inFiles, num_workers, hash_h);
+initializeWorkerBlocks(hash_h, block_h, num_workers);
+initializeOutputs(outFiles, out_location, num_workers);
+sprintf(worker_diff_file, "%s/workerDiffScale.txt",out_location);
+POP_DOMAIN(t_handle); // FINISH FILE INIT
+
+/*------------------------------------------------------------------------*/
+/**************************************************************************/
+PUSH_DOMAIN(t_handle, "INIT", -2, 2, 2); // START VARIABLES INIT
+
 /*-------------------------FLAG INITIALIZATION----------------------------*/
     WORD * time_h;
     cudaStream_t tStream;
     initTime(&tStream, &time_h);
+		sprintf(stream_name, "TIME UPDATE");
+		NAME_STREAM(tStream, stream_name);
 
     flag_h = (int *)malloc(sizeof(int));
     flag_h[0] = 0;
@@ -1100,21 +1162,89 @@ if(errFile = fopen(error_filename, "w")){
 /**************************************************************************/
 
 /**********************************************************************************************************************************/
+/******************************************************WORKER INITIALIZATION*******************************************************/
+/**********************************************************************************************************************************/
+
+/*------------------------THREAD INITIALIZATION---------------------------*/
+    for(int i = 0; i < num_workers; i++){
+				PUSH_DOMAIN(w_handle[i], "INIT", i, 2, 2);
+				createCudaVars(&t1[i], &t2[i], &streams[i]);
+				NAME_STREAM(streams[i], stream_name);
+
+        chain_blocks[i] = 0; diff_level[i] = 1; errEOF[i] = 0;
+				sprintf(stream_name, "WORKER_%i", i);
+				NAME_STREAM(streams[i], stream_name);
+				live_stream[i] = 1;
+        cudaEventCreate(&diff_t1[i]);
+        cudaEventCreate(&diff_t2[i]);
+
+        getDifficulty(block_h[i], &target_h[i], &target_length[i], &difficulty[i], i+1);
+				setMiningDifficulty(&(streams[i]), block_h[i], i+1);
+				POP_DOMAIN(w_handle[i]); // POP WORKER INIT RANGE
+    }
+/*------------------------------------------------------------------------*/
+/**************************************************************************/
+
+/**********************************************************************************************************************************/
+/******************************************************PARENT INITIALIZATION*******************************************************/
+/**********************************************************************************************************************************/
+if(multilevel == 1){
+			PUSH_DOMAIN(p_handle, "INIT", -1, 2, 2);
+	/*-------------------------BLOCK INITIALIZATION--------------------------*/
+			sprintf(bfilename, "outputs/results_%i_pchains/pBlockOutputs.txt",num_workers);
+			sprintf(hfilename, "outputs/results_%i_pchains/pHashOutputs.txt",num_workers);
+			initializeParentBlock(pBlock_h);
+			initializeParentOutputs(bfilename, hfilename);
+	/*------------------------CHAIN INITIALIZATION---------------------------*/
+			sprintf(stream_name, "PARENT");
+			NAME_STREAM(pStream, stream_name);
+			live_pstream = 1;
+			cudaEventCreate(&diff_p1);
+			cudaEventCreate(&diff_p2);
+			cudaEventCreate(&buff_p1);
+			cudaEventCreate(&buff_p2);
+
+			getDifficulty(pBlock_h, &ptarget_h, &ptarget_length, &pdifficulty, 0);
+			setMiningDifficulty(&pStream, pBlock_h, 0);
+			cudaMemcpyAsync(ptarget_d, ptarget_h, HASH_SIZE, cudaMemcpyHostToDevice, pStream);
+			POP_DOMAIN(p_handle);  // POP ALLOC RANGE
+}
+
+/*------------------------------------------------------------------------*/
+/**************************************************************************/
+
+/**********************************************************************************************************************************/
 /********************************************************MINING LOOP BEGIN*********************************************************/
 /**********************************************************************************************************************************/
+//POP_DOMAIN(t_handle); // END PARENT INIT
+POP_DOMAIN(t_handle); // END TIMING INIT
 cudaEventRecord(g_time[0], g_timeStream);
+PUSH_DOMAIN(t_handle, "START", -2, 2, 3); // START STREAM INIT
 /*--------------------------------------------------------------------------------------------------------------------------------*/
 /**************************************************INITIALIZE ASYNCHRONOUS STREAMS*************************************************/
-
+		if(multilevel == 1){
+			PUSH_DOMAIN(p_handle, "MINING", -1, 2, 3);
+			PUSH_DOMAIN(p_handle, "DIFF", -1, 0, 5); //FIXME
+		}
+		for(int i = 0; i < num_workers; i++){
+			PUSH_DOMAIN(w_handle[i], "MINING", i, 2, 3);
+			PUSH_DOMAIN(w_handle[i], "DIFF", i, 0, 5);
+			PUSH_DOMAIN(w_handle[i], "START", i, 2, 3);  // START WORKER MINING
+		}
     for(int i = 0; i < num_workers; i++){
         logStart(i, 1, hash_h[i]);
         cudaEventRecord(t1[i], streams[i]);
         cudaEventRecord(diff_t2[i], streams[i]);
         cudaEventRecord(diff_t1[i], streams[i]);
-        cudaMemcpyAsync(target_d[i], target_h[i], HASH_SIZE, cudaMemcpyHostToDevice, streams[i]);
         launchMiner(i+1, &streams[i], &block_d[i],  &hash_d[i], &nonce_d[i], &block_h[i], &hash_h[i], &nonce_h[i], &target_d[i], &flag_d[i], flag_h, &target_length[i]);
-        // SET EVENT TO RECORD AFTER KERNEL COMPLETION
-        cudaEventRecord(t2[i], streams[i]);
+        // SET EVENT TO RECORD AFTER KERNEL COMPLETION (BLOCKS OTHER STREAMS IF TOO MANY ARE SET)
+//				printf("LAUNCHED MINER %i\n", i);
+				cudaEventRecord(t2[i], streams[i]);
+//				printf("SET EVENT %i\n", i);
+
+				POP_DOMAIN(w_handle[i]); // POP START
+				PUSH_DOMAIN(w_handle[i], "B", i, 2, 5);  // START BLOCKS
+				// TODO START DIFFICULTY RANGE & BLOCK COUNT HERE
     }
     // START PARENT TIMERS
     if(multilevel == 1){
@@ -1122,19 +1252,31 @@ cudaEventRecord(g_time[0], g_timeStream);
       cudaEventRecord(buff_p1, pStream);
       cudaEventRecord(diff_p1, pStream);
     }
+		POP_DOMAIN(t_handle); // END STREAM INITIALIZATION
     cudaEventRecord(g_time[1], g_timeStream);
+		PUSH_DOMAIN(t_handle, "MINING", -2, 2, 5); // START MINING LOOP
     /*--------------------------------------------------------------------------------------------------------------------------------*/
     /********************************************BEGIN MINING UNTIL TARGET BLOCKS ARE FOUND********************************************/
     int block_total = 0;
     while(block_total < TARGET_BLOCKS || PROC_REMAINING != 0){
-      updateTime(&tStream, time_h);
+      updateTime(&tStream, time_h, t_handle);
       if(MINING_PROGRESS == 1){
         mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
       }
       // SET FLAG_TARGET TO 1
       if(block_total >= TARGET_BLOCKS && FLAG_TARGET == 0){
           FLAG_TARGET = 1;
+
+					// END MINING SECTION, MOVE ON TO FINAL HASH
+					for(int i = 0; i < num_workers; i++){
+						POP_DOMAIN(w_handle[i]); // POP BLOCKS, REPLACE WITH FINAL
+						PUSH_DOMAIN(w_handle[i], "FINAL", i, 2, 6);  // START FINAL MINING
+					}
+					POP_DOMAIN(t_handle); // END MINING LOOP
           cudaEventRecord(g_time[2], g_timeStream);
+					PUSH_DOMAIN(t_handle, "FINAL", -2, 2, 6); // START FINAL LOOP
+
+
           printLog("\n\n**********************************************\nTARGET REACHED, FINISHING REMAINING PROCESSES*\n**********************************************\n\n");
       }
       /*--------------------------------------------------------------------------------------------------------------------------------*/
@@ -1152,6 +1294,7 @@ cudaEventRecord(g_time[0], g_timeStream);
 	            printOutputFile(bfilename, &pBlock_h[0], pHash_out_h, pnonce_h, pchain_blocks, ptimingResults, pdifficulty, -1, 1);
 	            updateParentHash(pBlock_h, pHash_out_h);
 	            parentFlag = 0;
+							POP_DOMAIN(p_handle); // POP THE PREVIOUS BLOCK
 	          }
 	          // PARENT CHAIN IS STILL PROCESSING LAST BLOCK, WAIT FOR COMPLETION
 	          else if(parentFlag == 1 && pbuffer_blocks == PARENT_BLOCK_SIZE){
@@ -1169,7 +1312,7 @@ cudaEventRecord(g_time[0], g_timeStream);
 	                }
 	                // WAIT FOR PARENT TO FINISH, THEN RETRIEVE RESULTS
 	                while(cudaStreamQuery(pStream) != 0){
-	                  updateTime(&tStream, time_h);
+	                  updateTime(&tStream, time_h, t_handle);
 	                  if(MINING_PROGRESS == 1){
 	                    mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
 	                  }
@@ -1196,6 +1339,7 @@ cudaEventRecord(g_time[0], g_timeStream);
 	                printOutputFile(bfilename, &pBlock_h[0], pHash_out_h, pnonce_h, pchain_blocks, ptimingResults, pdifficulty, -1, 1);
 	                updateParentHash(pBlock_h, pHash_out_h);
 	                parentFlag = 0;
+									POP_DOMAIN(p_handle); // POP THE PREVIOUS BLOCK
 	          }
 	          // PARENT BUFFER IS READY, EXIT FOR LOOP TO BEGIN PARENT EXECUTION
 	          if(pbuffer_blocks == PARENT_BLOCK_SIZE){
@@ -1216,7 +1360,9 @@ cudaEventRecord(g_time[0], g_timeStream);
 	          cudaEventElapsedTime(&timingResults[i], t1[i], t2[i]);
 	          printOutputFile(outFiles[i], block_h[i], hash_h[i], nonce_h[i], chain_blocks[i], timingResults[i], difficulty[i], i, 1);
 	          // PRINT TO PARENT HASH FILE AND ADD RESULTS TO PARENT BUFFER IF MULTILEVEL
-	          if(multilevel == 1){
+						POP_DOMAIN(w_handle[i]); // POP CURRENT BLOCK
+
+						if(multilevel == 1){
 	            printOutputFile(hfilename, block_h[i], hash_h[i], nonce_h[i], chain_blocks[i], timingResults[i], difficulty[i], i, 0);
 	            // COPY HASH TO THE PARENT BUFFER
 	            for(int j = 0; j < 32; j++){
@@ -1242,17 +1388,20 @@ cudaEventRecord(g_time[0], g_timeStream);
 	            printDifficulty(outFiles[i], i+1, difficulty[i], diff_timing[i], (chain_blocks[i]-(diff_level[i]-1)*DIFFICULTY_LIMIT));
 	            // INCREMENT IF TARGET HASN'T BEEN REACHED
 	            if(FLAG_TARGET == 0){
+								POP_DOMAIN(w_handle[i]); // POP CURRENT DIFF
 	              updateDifficulty(block_h[i], diff_level[i]);
 	              getDifficulty(block_h[i], &target_h[i], &target_length[i], &difficulty[i], i+1);
 								setMiningDifficulty(&(streams[i]), block_h[i], i+1);
 	              cudaMemcpyAsync(target_d[i], target_h[i], HASH_SIZE, cudaMemcpyHostToDevice, streams[i]);
 	              cudaEventRecord(diff_t1[i], streams[i]);
 	              diff_level[i]++;
+								PUSH_DOMAIN(w_handle[i], "DIFF", i, 2, 5);  // START NEW DIFF
 	            }
 	          }
 
 	          // MINE NEXT BLOCK ON THIS WORKER IF TARGET HASN'T BEEN REACHED
 	          if(FLAG_TARGET == 0){
+							PUSH_DOMAIN(w_handle[i], "B", i, 2, 5);  // START NEXT BLOCK
 	            errEOF[i] = updateBlock(inFiles[i], block_h[i], hash_h[i]);
 	            if(errEOF[i] == 1){
 	              char eof_str[20];
@@ -1265,6 +1414,12 @@ cudaEventRecord(g_time[0], g_timeStream);
 	            cudaEventRecord(t2[i], streams[i]);
 	          } else{ // EXECUTION COMPLETED, DELETE CUDA VARS TO PREVENT ADDITIONAL ENTRY INTO THIS CASE
 							destroyCudaVars(&t1[i], &t2[i], &streams[i]);
+
+							// END WORKER FINAL, START CLEANUP
+							POP_DOMAIN(w_handle[i]); // POP DIFF
+							POP_DOMAIN(w_handle[i]); // POP MINING
+							PUSH_DOMAIN(w_handle[i], "CLEAN", i, 2, 9);  // START WORKER MINING
+
 							live_stream[i] = 0; // INDICATES THAT THE STREAM IS DEAD, DONT CHECK IT ANY MORE!!
 	            cudaEventDestroy(diff_t1[i]);
 	            cudaEventDestroy(diff_t2[i]);
@@ -1296,6 +1451,7 @@ cudaEventRecord(g_time[0], g_timeStream);
           printDebug(merkle_debug);
           // PARENT DIFFICULTY SCALING
           if(pchain_blocks >= pdiff_level * DIFFICULTY_LIMIT){ // Increment difficulty
+						POP_DOMAIN(p_handle); // POP THE PREVIOUS DIFFICULTY
             cudaEventRecord(diff_p2, pStream);
             cudaEventSynchronize(diff_p2);
             cudaEventElapsedTime(&pdiff_timing, diff_p1, diff_p2);
@@ -1307,7 +1463,9 @@ cudaEventRecord(g_time[0], g_timeStream);
             cudaMemcpyAsync(ptarget_d, ptarget_h, HASH_SIZE, cudaMemcpyHostToDevice, pStream);
             cudaEventRecord(diff_p1, pStream);
             pdiff_level++;
+						PUSH_DOMAIN(p_handle, "DIFF", -1, 0, 5); // PUSH NEW DOMAIN
           }
+					PUSH_DOMAIN(p_handle, "B", -1, 2, 5); // START NEXT BLOCK
           cudaEventRecord(p1, pStream);
           launchMerkle(&pStream, &pHash_merkle_d,  &pRoot_d, &pHash_merkle_h,  &pRoot_h, &pflag_d, flag_h, pbuffer_blocks);
           updateParentRoot(pBlock_h, pRoot_h);
@@ -1337,7 +1495,7 @@ cudaEventRecord(g_time[0], g_timeStream);
           // FINAL ITERATION, WAIT FOR PARENT STREAM TO FINISH
           if(PROC_REMAINING == 1){
             while(cudaStreamQuery(pStream) != 0){
-              updateTime(&tStream, time_h);
+              updateTime(&tStream, time_h, t_handle);
               if(MINING_PROGRESS == 1){
                 mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
               }
@@ -1349,6 +1507,7 @@ cudaEventRecord(g_time[0], g_timeStream);
             printOutputFile(bfilename, &pBlock_h[0], pHash_out_h, pnonce_h, pchain_blocks, ptimingResults, pdifficulty, -1, 1);
             updateParentHash(pBlock_h, pHash_out_h);
             parentFlag = 0;
+						POP_DOMAIN(p_handle); // POP THE PREVIOUS BLOCK
 
             cudaEventRecord(diff_p2, pStream);
             cudaEventSynchronize(diff_p2);
@@ -1356,6 +1515,12 @@ cudaEventRecord(g_time[0], g_timeStream);
             printDifficulty(bfilename, -1, pdifficulty, pdiff_timing, (pchain_blocks-(pdiff_level-1)*DIFFICULTY_LIMIT));
             // CLEAN UP PARENT CUDA VARS, SET PROCS_REMAINING TO ZERO TO EXIT
             destroyCudaVars(&p1, &p2, &pStream);
+
+						// FINISH PARENT, MOVE ON TO CLEANUP
+						POP_DOMAIN(p_handle); //POP DIFF
+						POP_DOMAIN(p_handle); //POP MINING
+						PUSH_DOMAIN(p_handle, "CLEAN", -1, 2, 9);
+
 						live_pstream = 0;
             cudaEventDestroy(diff_p1);
             cudaEventDestroy(diff_p2);
@@ -1365,8 +1530,10 @@ cudaEventRecord(g_time[0], g_timeStream);
           }
       }
     } // WHILE LOOP END
+		POP_DOMAIN(t_handle); // END FINAL LOOP
     cudaEventRecord(g_time[3], g_timeStream);
-    cudaDeviceSynchronize();
+		PUSH_DOMAIN(t_handle, "CLEAN", -2, 2, 9); // START MEMORY FREEING
+		cudaDeviceSynchronize();
     printLog("FINISHED PROCESSING, FREEING MEMORY");
     /**********************************************************************************************************************************/
     /***************************************************FREE HOST AND DEVICE MEMORY****************************************************/
@@ -1394,10 +1561,20 @@ cudaEventRecord(g_time[0], g_timeStream);
     /*************************************************FREE PARENT AND WORKER VARIABLES*************************************************/
     printDebug((const char*)"FREEING WORKER MEMORY");
     freeWorkerMemory(num_workers, hash_h, hash_d, block_h, block_d);
-    if(multilevel == 1){
+
+		// DESTROY WORKER PROFILING DOMAINS
+		for(int i = 0; i < num_workers; i++){
+			POP_DOMAIN(w_handle[i]);POP_DOMAIN(w_handle[i]);
+			DOMAIN_DESTROY(w_handle[i]);
+		}
+		if(multilevel == 1){
       printDebug((const char*)"FREEING PARENT MEMORY");
       freeParentMemory(pHash_h, pHash_d, &pBlock_h, &pBlock_d, &pRoot_h, &pRoot_d, &pHash_out_h, &pHash_out_d, &pHash_merkle_h, &pHash_merkle_d);
-    }
+
+			// DESTROY PARENT PROFILING DOMAINS
+			POP_DOMAIN(p_handle);POP_DOMAIN(p_handle);
+			DOMAIN_DESTROY(p_handle);
+		}
 
     /**********************************************************************************************************************************/
     /******************************************************PRINT TIMING ANALYSIS*******************************************************/
@@ -1439,6 +1616,12 @@ TOTAL_EXECUTION_TIME: %f\n\
     for(int i = 0; i < 4; i++){
       cudaEventDestroy(g_time[i]);
     }
+
+		// DESTROY TIMING PROFILING DOMAINS
+		POP_DOMAIN(t_handle); // END MEMORY FREE LOOP
+		POP_DOMAIN(t_handle); // END TIMING RANGE
+		DOMAIN_DESTROY(t_handle); // FREE TIMING DOMAIN
+		STOP_PROFILE; // END PROFILING
 
     printLog("APPLICATION FINISHED. NOW EXITING...");
     cudaDeviceSynchronize();
@@ -1598,7 +1781,7 @@ __host__ void hostFunctionalTest(void){
 
 	// HASH TESTS
 	// Simple input 'abcd'
-	PUSH_DOMAIN(handle, "SIMPLE TEST", 0, 0);
+	PUSH_DOMAIN(handle, "SIMPLE TEST", -2, 0, 0);
 		strcpy((char*)test_str, "61626364");
 		strcpy((char*)correct_str, "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589");
 		testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 4, 0, &logStr);
@@ -1607,7 +1790,7 @@ __host__ void hostFunctionalTest(void){
 	POP_DOMAIN(handle);
 
 	// 32 BYTE MESSAGE
-	PUSH_DOMAIN(handle, "32B TEST", 1, 1);
+	PUSH_DOMAIN(handle, "32B TEST", -2, 1, 1);
 		strcpy((char*)test_str, "1979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f56");
 		strcpy((char*)correct_str, "928e8c1f694fc888316690b3c05573c226785344941bed6016909aefb07ecb6d");
 		testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 32, 0, &logStr);
@@ -1616,7 +1799,7 @@ __host__ void hostFunctionalTest(void){
 	POP_DOMAIN(handle);
 
 	// 64 BYTE MESSAGE
-	PUSH_DOMAIN(handle, "64B TEST", 2, 2);
+	PUSH_DOMAIN(handle, "64B TEST", -2, 2, 2);
 		strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e");
 		strcpy((char*)correct_str, "8e8ce198ef7f22243d9ed05b336b49a8051003a45c5e746ae2d7965d9d93b072");
 		testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 64, 0, &logStr);
@@ -1625,7 +1808,7 @@ __host__ void hostFunctionalTest(void){
 	POP_DOMAIN(handle);
 
 	// 80 BYTE MESSAGE
-	PUSH_DOMAIN(handle, "80B TEST", 3, 3);
+	PUSH_DOMAIN(handle, "80B TEST", -2, 3, 3);
 		strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
 		strcpy((char*)correct_str, "c45337946ef4402f6bf49e03039ca5d1dcf5edb5f885110fdb3f2e690d2ccb35");
 		testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0, &logStr);
@@ -1634,8 +1817,8 @@ __host__ void hostFunctionalTest(void){
 	POP_DOMAIN(handle);
 
 	// 80 BYTE MESSAGE (DOUBLE HASH)
-	PUSH_DOMAIN(handle, "80B MINING TEST", 4, 4);
-		PUSH_DOMAIN(handle, "DEFAULT HASH", 4, 0);
+	PUSH_DOMAIN(handle, "80B MINING TEST", -2, 4, 4);
+		PUSH_DOMAIN(handle, "DEFAULT HASH", -2, 4, 0);
 			strcpy((char*)test_str, "0100000000000000000000000000000000000000000000000000000000000000000000001979507de7857dc4940a38410ed228955f88a763c9cccce3821f0a5e65609f565c2ffb291d00ffff01004912");
 			strcpy((char*)correct_str, "265a66f42191c9f6b26a1b9d4609d76a0b5fdacf9b82b6de8a3b3e904f000000");
 			testHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 1, &logStr);
@@ -1643,7 +1826,7 @@ __host__ void hostFunctionalTest(void){
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
 		// NEW DOUBLE HASH FUNCTION
-		PUSH_DOMAIN(handle, "ACCEL HASH", 4, 1);
+		PUSH_DOMAIN(handle, "ACCEL HASH", -2, 4, 1);
 			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x1e, &logStr);
 			sprintf(logMsg, "NEW DOUBLE HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
@@ -1654,9 +1837,9 @@ __host__ void hostFunctionalTest(void){
 
 
 	// VARIOUS DIFFICULTIES TEST
-	PUSH_DOMAIN(handle, "DIFFICULTY TEST", 5, 5);
+	PUSH_DOMAIN(handle, "DIFFICULTY TEST", -2, 5, 5);
 		// 2 ZEROS (DIFFICULTY: 0x2000ffff)
-		PUSH_DOMAIN(handle, "D=0x2000ffff", 5, 0);
+		PUSH_DOMAIN(handle, "D=0x2000ffff", -2, 5, 0);
 			strcpy((char*)test_str, "01000000a509fafcf42a5f42dacdf8f4fb89ff525c0ee3acb0d68ad364f2794f2d8cd1007d750847aac01636528588e2bccccb01a91b0b19524de666fdfaa4cfad669fcd5c39b1141d00ffff00005cc0");
 			strcpy((char*)correct_str, "d1bca1de492c24b232ee591a1cdf16ecd8c51400d4da49a97f9536f27b286e00");
 			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x20, &logStr);
@@ -1664,7 +1847,7 @@ __host__ void hostFunctionalTest(void){
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
 		// 4 ZEROS (DIFFICULTY: 0x1f00ffff)
-		PUSH_DOMAIN(handle, "D=0x1f00ffff", 5, 1);
+		PUSH_DOMAIN(handle, "D=0x1f00ffff", -2, 5, 1);
 			strcpy((char*)test_str, "010000008e2e5fd95b75846393b579f7368ebbee8ca593ed574dd877b4255e1385cd0000286e0824b41e054a6afea14b0b4588017895ace8f9cc4837279074e238462cd75c340d171d00ffff0002043d");
 			strcpy((char*)correct_str, "fbbb3f2adadd66d9d86cdacc735f99edece886faed7a0fbc17594da445820000");
 			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x1f, &logStr);
@@ -1672,7 +1855,7 @@ __host__ void hostFunctionalTest(void){
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
 		// 6 ZEROS (DIFFICULTY: 0x1e00ffff)
-		PUSH_DOMAIN(handle, "D=0x1e00ffff", 5, 2);
+		PUSH_DOMAIN(handle, "D=0x1e00ffff", -2, 5, 2);
 			strcpy((char*)test_str, "010000000298ff1c6d24d9f04ed441ce3f3a4b695d7fdb8cc13bc7f7417a68a44b000000d49d1c71552793e1d9182ab63ca5fe8d23f2711ecb26f7b0f9ad931c5980aadb5c340d521c00ffff020caca2");
 			strcpy((char*)correct_str, "46b26c30b35175ecb88ddbe08f2d56070f616b2d6f302ef334286fc575000000");
 			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x1e, &logStr);
@@ -1680,7 +1863,7 @@ __host__ void hostFunctionalTest(void){
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
 		// 8 ZEROS (DIFFICULTY: 0x1d00ffff)
-		PUSH_DOMAIN(handle, "D=0x1d00ffff", 5, 3);
+		PUSH_DOMAIN(handle, "D=0x1d00ffff", -2, 5, 3);
 			strcpy((char*)test_str, "01000000ac44a5ddb3c7a252ab2ea9278ab4a27a5fd88999ff192d5f6e86f66b000000009984a9337cf3852ef758d5f8baf090700c89133ba9c19e27f39b465942d8e7465c3440bd1b00ffffdba51c5e");
 			strcpy((char*)correct_str, "30498d768dba64bd6b1455ae358fefa3217096449f05800b61e2e93b00000000");
 			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x1d, &logStr);
@@ -1688,7 +1871,7 @@ __host__ void hostFunctionalTest(void){
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
 		// 16 ZEROS (DIFFICULTY: 0x1900ffff)
-		PUSH_DOMAIN(handle, "D=0x1900ffff", 5, 4);
+		PUSH_DOMAIN(handle, "D=0x1900ffff", -2, 5, 4);
 			strcpy((char*)test_str, "0100000081cd02ab7e569e8bcd9317e2fe99f2de44d49ab2b8851ba4a308000000000000e320b6c2fffc8d750423db8b1eb942ae710e951ed797f7affc8892b0f1fc122bc7f5d74df2b9441a42a14695");
 			strcpy((char*)correct_str, "1dbd981fe6985776b644b173a4d0385ddc1aa2a829688d1e0000000000000000");
 			testMiningHash(test_str, correct_str, test_h, test_d, result_h, result_d, 80, 0x19, &logStr);
@@ -1846,7 +2029,7 @@ __host__ void hostBenchmarkTest(int num_workers){
 		DOMAIN_HANDLE handle;
 	#endif
 	DOMAIN_CREATE(handle, "BENCHMARK TEST");
-	PUSH_DOMAIN(handle, "BENCHMARK TEST", 0, 0);
+	PUSH_DOMAIN(handle, "BENCHMARK TEST", -2, 0, 0);
 
   // Allocate test block memory
   test_block_h = (BYTE *)malloc(BLOCK_SIZE);
@@ -1917,9 +2100,11 @@ __host__ void miningBenchmarkTest(int num_workers){
 	NAME_STREAM(bench_stream, stream_name);
 	#ifdef USE_NVTX
 		DOMAIN_HANDLE handle;
+	#else
+		int handle = 0;
 	#endif
 	DOMAIN_CREATE(handle, "BENCHMARK TEST");
-	PUSH_DOMAIN(handle, "BENCHMARK TEST", 0, 0);
+	PUSH_DOMAIN(handle, "BENCHMARK TEST", -2, 0, 0);
 
   // Allocate test block memory
   test_block_h = (BYTE *)malloc(BLOCK_SIZE);
@@ -1956,7 +2141,7 @@ __host__ void miningBenchmarkTest(int num_workers){
 	getMiningDifficulty(test_block_h, &target_h, &t_target_length, &t_difficulty, 0);
 	cudaMemcpyToSymbolAsync(test_target_c, target_h, TARGET_C_SIZE, 0, cudaMemcpyHostToDevice, bench_stream);
 	srand(time(0));
-	for(int j = 0; j < 10; j++){
+//	for(int j = 0; j < 10; j++){
 		// CREATE RANDOM TEST BLOCK
 	  for(int i = 0; i < 80; i++){
 	      test_block_h[i] = (rand() % 255) & 0xFF;
@@ -1968,24 +2153,24 @@ __host__ void miningBenchmarkTest(int num_workers){
 			basemsg_h[i] = (test_block_h[i*4] << 24) | (test_block_h[i*4+1] << 16) | (test_block_h[i*4+2] << 8) | (test_block_h[i*4+3]);
 		}
 		cudaMemcpyToSymbolAsync(test_basemsg_c, basemsg_h, BLOCK_C_SIZE, 0, cudaMemcpyHostToDevice, bench_stream);
-		cudaMemset(test_flag, 0, sizeof(int));
-		cudaMemset(iterations_d, 0, sizeof(int));
+		cudaMemsetAsync(test_flag, 0, sizeof(int), bench_stream);
+		cudaMemsetAsync(iterations_d, 0, sizeof(int), bench_stream);
 
 	  miningBenchmarkKernel<<<WORKER_BLOCKS, NUM_THREADS, 0, bench_stream>>>(test_block_d, test_hash_d, test_flag, iterations_d);
 
 		// UPDATE TIMING VARIABLE
 		while(cudaStreamQuery(bench_stream) != 0){
-			updateTime(&tStream, time_h);
+			updateTime(&tStream, time_h, handle);
 		}
 
 		cudaMemcpyAsync(iterations_h, iterations_d, sizeof(int), cudaMemcpyDeviceToHost, bench_stream);
 		cudaMemcpyAsync(test_block_h, test_block_d, BLOCK_SIZE, cudaMemcpyDeviceToHost, bench_stream);
 		cudaMemcpyAsync(test_hash_h, test_hash_d, HASH_SIZE, cudaMemcpyDeviceToHost, bench_stream);
 		total_iterations += *iterations_h;
-		printf("FINSHED BLOCK %i IN %i ITERATIONS! \n HASH: ", j, *iterations_h);
+	//	printf("FINSHED BLOCK %i IN %i ITERATIONS! \n HASH: ", j, *iterations_h);
 		printHex(test_hash_h, 32);
 		printf("\n\n");
-	}
+//	}
 
 	cudaEventRecord(bench_f, bench_stream);
   cudaDeviceSynchronize();
@@ -2030,6 +2215,34 @@ __host__ void miningBenchmarkTest(int num_workers){
 	free(target_h);
 	free(basemsg_h);
   return;
+}
+
+__host__ void colorTest(int num_colors, int num_palettes){
+	START_PROFILE;
+	// INITIALIZE PROFILING DOMAINS
+	char range_name[50];
+	#ifdef USE_NVTX
+		DOMAIN_HANDLE test_handle;
+	#endif
+	DOMAIN_CREATE(test_handle, "COLOR PALETTE TEST");
+
+	for(int i = 0; i < num_palettes; i++){
+		sprintf(range_name, "PALETTE %i", i);
+		PUSH_DOMAIN(test_handle, range_name, -2, 0, 0);
+		for(int j = 0; j < num_colors; j++){
+			sprintf(range_name, "COLOR %i", j);
+			PUSH_DOMAIN(test_handle, range_name, -2, i, j);
+			POP_DOMAIN(test_handle);
+		}
+		POP_DOMAIN(test_handle);
+	}
+	DOMAIN_DESTROY(test_handle);
+	unsigned int color = 0x80;
+	for(int i = 0; i < 12; i++){
+		printf("0xff%06x, ", color);
+		color *= 2 ;
+	}
+	STOP_PROFILE;
 }
 
 
@@ -2145,8 +2358,13 @@ __host__ void freeFileStrings(char ** str, int num_workers){
 __host__ void createCudaVars(cudaEvent_t * timing1, cudaEvent_t * timing2, cudaStream_t * stream){
   cudaEventCreate(timing1);
   cudaEventCreate(timing2);
+
+	// TEST EVENT FLAGS (FIXES TIME UPDATE BUG, BUT NO TIMING STATISTICS AVAILABLE )
+//	cudaEventCreateWithFlags(timing1, cudaEventDisableTiming);
+//	cudaEventCreateWithFlags(timing2, cudaEventDisableTiming);
+
 //  cudaStreamCreate(stream);
-	cudaStreamCreateWithPriority(stream, cudaStreamNonBlocking, 2); //Create the stream such that it may run concurrently with the default stream, lower priority than timing stream
+	cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking); //Create the stream such that it may run concurrently with the default stream, lower priority than timing stream
 }
 __host__ void destroyCudaVars(cudaEvent_t * timing1, cudaEvent_t * timing2, cudaStream_t * stream){
   cudaEventDestroy(*timing1);
@@ -2159,8 +2377,8 @@ __host__ void destroyCudaVars(cudaEvent_t * timing1, cudaEvent_t * timing2, cuda
 // CREATE AND FREE FUNCTIONS FOR UPDATING THE DEVICE TIME
 __host__ void initTime(cudaStream_t * tStream, WORD ** time_h){
   *time_h = (WORD *)malloc(sizeof(WORD));
-  cudaStreamCreateWithPriority(tStream, cudaStreamNonBlocking, 0); // HIGHEST PRIORITY STREAM
-  updateTime(tStream, *time_h);
+  cudaStreamCreateWithPriority(tStream, cudaStreamNonBlocking, -1);
+  updateTime(tStream, *time_h, 0);
 }
 __host__ void freeTime(cudaStream_t * tStream, WORD ** time_h){
   free(*time_h);
@@ -2292,16 +2510,32 @@ __host__ void updateDifficulty(BYTE * block_h, int diff_level){
   block_h[75] = new_diff;
 }
 // UPDATE THE CURRENT TIME ON DEVICE IN CASE OF NONCE OVERFLOW
-__host__ void updateTime(cudaStream_t * tStream, WORD * time_h){
+__host__ void updateTime(cudaStream_t * tStream, WORD * time_h, DOMAIN_HANDLE prof_handle){
 	WORD old_time = *time_h;
 	*time_h = time(0);
 //  getTime(time_h);
 	if(old_time != *time_h){ // Time has changed, update device memory
-//		printf("UPDATING...");
+//		cudaError_t time_err;
+		#ifdef USE_NVTX
+		printf("UPDATING...");
+		PUSH_DOMAIN(prof_handle, "T_UPDATE", -1, 1, 0);
+		cudaMemcpyToSymbolAsync(time_const, time_h, sizeof(WORD), 0, cudaMemcpyHostToDevice, *tStream);
+	//	cudaMemcpyToSymbol(time_const, time_h, sizeof(WORD), 0, cudaMemcpyHostToDevice);
+		cudaStreamSynchronize(*tStream);
+		printf("HOST TIME UPDATED: %08x\n", *time_h);
+
+		POP_DOMAIN(prof_handle);
+		#else
+		printf("UPDATING...");
 		cudaMemcpyToSymbolAsync(time_const, time_h, sizeof(WORD), 0, cudaMemcpyHostToDevice, *tStream);
 //		cudaMemcpyToSymbol(time_const, time_h, sizeof(WORD), 0, cudaMemcpyHostToDevice);
-///  	cudaMemcpyAsync(time_d, time_h, 4*sizeof(BYTE), cudaMemcpyHostToDevice, *tStream);
+//		printf("\nTIME STATUS: [CODE: %i]:(%s: %s) \n", time_err, cudaGetErrorName(time_err), cudaGetErrorString(time_err));
+//		time_err = cudaStreamQuery(*tStream);
+//		printf("\nSTREAM STATUS: [CODE: %i]:(%s: %s) \n", time_err, cudaGetErrorName(time_err), cudaGetErrorString(time_err));
+
+//		cudaStreamSynchronize(*tStream);
 //		printf("HOST TIME UPDATED: %08x\n", *time_h);
+		#endif
 	}
 }
 
@@ -2480,12 +2714,14 @@ __host__ void launchMiner(int kernel_id, cudaStream_t * stream, BYTE ** block_d,
 //	cudaMemcpyToSymbolAsync(block_const, basemsg_hw, sizeof(WORD)*16, kernel_id*16, cudaMemcpyHostToDevice, *stream);
 	cudaMemcpyToSymbolAsync(block_const, basemsg_hw, BLOCK_C_SIZE, BLOCK_C_SIZE*kernel_id, cudaMemcpyHostToDevice, *stream);
 //	free(basemsg_hw);
-	WORD * block_ptr;
-	cudaGetSymbolAddress((void**) &block_ptr, block_const);
 	int block_offset = kernel_id*16;
 	int target_offset = kernel_id*8;
 
 //  minerKernel<<<num_blocks,NUM_THREADS, 0, *stream>>>(*block_d, *hash_d, *nonce_d, *target_d, *flag_d, *target_length);
+//	printf("WAITING FOR KERNEL MEMORY COPY TO HOST \n");
+//	cudaStreamSynchronize(*stream);
+//	printf("COPY COMPLETE, STARTING KERNEL...\n");
+
 
 	minerKernel_new<<<num_blocks,NUM_THREADS, 0, *stream>>>(*block_d, *hash_d, *nonce_d, *flag_d, block_offset, target_offset);
 }
@@ -3242,7 +3478,7 @@ __global__ void minerKernel_new(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, i
 	// ALLOCATED ON SHARED MEMORY TO FREE UP REGISTER USAGE FOR HASHING
 	__shared__ WORD uniqueBlock[4096];
 	WORD * unique_ptr = &(uniqueBlock[threadId*4]);
-
+	//FIXME PERFORMANCE WOULD MOST LIKELY IMPROVE IF block_d WAS ONLY USED HERE
 	// COMPUTE UNIQUE PORTION OF THE BLOCK HERE INSTEAD OF INSIDE THE LOOP FOR SPEEDUP
 	unique_ptr[0] = (block_d[64] << 24) | (block_d[65] << 16) | (block_d[66] << 8) | (block_d[67]);  	// END OF PREVIOUS HASH (CONSTANT)
 	unique_ptr[1] = (block_d[68] << 24) | (block_d[69] << 16) | (block_d[70] << 8) | (block_d[71]); 	// CURRENT TIME ON THE BLOCK (UPDATED WHEN ALL NONCES ARE TRIED)
@@ -3267,6 +3503,7 @@ __global__ void minerKernel_new(BYTE * block_d, BYTE * hash_d, BYTE * nonce_f, i
 			nonce += inc_size;
     }else{
       flag_d[0] = 1;
+			// A NEW VARIABLE SHOULD BE USED TO STORE BLOCK, WHICH MAY REDUCE REG USAGE. NONCE IS UNNECCESSARY
 			nonce_f[0] = (unique_ptr[3] >> 24) & 0x000000FF;
 			nonce_f[1] = (unique_ptr[3] >> 16) & 0x000000FF;
 			nonce_f[2] = (unique_ptr[3] >> 8) & 0x000000FF;

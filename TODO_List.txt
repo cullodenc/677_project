@@ -53,6 +53,12 @@ Code improvements which are neccessary to have a fully functional program
     -As a potential fix for the timing bug, add dedicated streams for memory copies, which may remove any deadlocks that are created between streams
     -The ideal scenario would use two high priority memory transfer streams, creating full duplex communication to the GPU
 
+--Change Device Functions
+  | PRIORITY: Medium High
+  | Details:
+    -Several of the device related functions have variables which are either not used, or are used to both send and receive data
+    -This may not lead to the best performance, and should be updated such that the same memory isn't used to both send and receive
+
 --Optimize other hash functions
   | PRIORITY: Medium
   | Details:
@@ -160,6 +166,14 @@ TODO MISCELLANEOUS
     -The current code has a large number of variables which are currently independent, and quite a mess
     -Update the code to group the variables together into structs, helping with code organization
 
+--Better Error Handling
+  | PRIORITY: Medium
+  | Details:
+    -Minimum error handling has been implemented so far, and it would be beneficial to add error handling for a variety of cases
+    -CUDA: Proper error handlers should be added to ensure each CUDA function has executed completely (and the errors should be logged and resolved, or trigger a safe exit)
+    -C: Handlers or try catch statements should be used to avoid crashes from runtime errors in the non-cuda code
+    -EXIT: A functionality should be added to allow the program to safely stop before exiting (such as with a user input)
+
 
 --Create windows compatible alternatives
   | PRIORITY: Medium
@@ -182,7 +196,7 @@ TODO MISCELLANEOUS
   | Details:
     -The current code is primarily C, with a little bit of C++ mixed in as cuda functions
     -Updating this to C++ could provide many object oriented advantages that aren't possible with C
-    -This would also take a lot of effort, and is highly error prone. Thus this task is best reserved for a later point 
+    -This would also take a lot of effort, and is highly error prone. Thus this task is best reserved for a later point
 
 
 FIXME CLEANUP
