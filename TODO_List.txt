@@ -4,7 +4,7 @@ The items below are grouped by the type of task, and listed to some degree by th
 FIXME CRITICAL
 Critical issues that have yet to be resolved
 
-  Timing Update Bug(QUEUE BLOCKING)
+  Timing Update Bug(TIMING EVENT QUEUE BLOCKING)
     | Summary:
      -Timing updates blocked by too many operations being added to execute asynchronously
      -Can be resolved by removing events, but may arise later if more asynchronous stream operations are added
@@ -21,6 +21,9 @@ Bugs that currently exist in the program, arising under certain circumstances
   | DATE IDENTIFIED: 1-15-2019
   | DATE FIXED: N/A
   | PRIORITY: Medium
+  | STATUS: IN-PROGRESS
+    -Partially fixed at the cost of slightly decreased timing accuracy.
+    -More methods for accurate timing are being explored
   | DETAILS:
     -This bug presented itself through a complete halting of the mining process, with no new blocks after a substantial amount of time had passed
     -The worker kernels indicated a problem with the current time variable, as the kernel time updates showed no change over the course of several minutes
@@ -49,6 +52,8 @@ Code improvements which are neccessary to have a fully functional program
   | Details:
     -As a potential fix for the timing bug, add dedicated streams for memory copies, which may remove any deadlocks that are created between streams
     -The ideal scenario would use two high priority memory transfer streams, creating full duplex communication to the GPU
+    -NOTE Only two streams would be unwise, as this would lead to inner stream dependencies, stalling the completion of kernels which finish out of order
+          A more practical option is to create unique streams for each worker, and then have them wait on events before beginning
 
 --Change Device Functions
   | PRIORITY: Medium High
@@ -63,11 +68,13 @@ Code improvements which are neccessary to have a fully functional program
 
 --Add profiling visuals for mining
   | PRIORITY: Low
+  | STATUS: IN-PROGRESS
+    -Basic detailed profiling added
   | Details:
     -Similar to the benchmark and testing functions, add profiling support to the main miner which shows the stream names/activity, and better displays the blocks mined and difficulty scaling
     -At a basic level, this would simply show the activity, while a more elegant display would use color scaling to better depict the changes in the miner over time
-    -NOTE Basic detailed profiling added
     -TODO Add more informative color schemes and labels for blocks and difficulty scaling
+          Re-organize profiling calls into functions to clean up the main host process code
 
 --Optimize Merkle Root calculations
   | PRIORITY: Medium
@@ -75,15 +82,6 @@ Code improvements which are neccessary to have a fully functional program
     -The merkle root operation is currently quite bulky on shared memory, and limited in its potential for performance and scaling
     -Ideally, this algorithm would be adjusted to use built in shuffle functions to speed up the coalescing of data into the final thread
     -Storing the data in texture memory could also help to improve the performance for bigger transaction sets
-
---Use merkle root data for workers
-  | PRIORITY: Medium Low
-  | Dependencies: Optimize Merkle Root, Optimize hash functions
-  | Details:
-    -The current algorithm is able to emulate the complexity of a blockchain application, but it lacks the capability to actually process transactions
-    -This should be updated such that the workers each read a block of data from their file and calculate the merkle root prior to mining the data
-    -Using this method may require later optimizations so that the host doesn't get blocked on reading from the input files
-    -This method will also utilize a greater portion of the available memory copy bandwidth, which is currently drastically underutilized
 
 --Use Stream Callbacks
   | PRIORITY: Low
@@ -94,6 +92,30 @@ Code improvements which are neccessary to have a fully functional program
     -The downside is that this would require significant modifications to the existing code, and would probably be best implemented on another branch incase complications arise
     -Callbacks may also make it easier to implement CPU multithreading later on
     -NOTE CUDA functions can't be called from callbacks, so these would be best used to initiate other functions such as file I/O instead of timing
+    -These will work best for intermediate status outputs if multiple streams are used, such as to print the mining start log after merkle hashing has completed
+
+--Use merkle root data for workers
+  | PRIORITY: Medium Low
+  | Dependencies: Optimize Merkle Root, Optimize hash functions
+  | Details:
+    -The current algorithm is able to emulate the complexity of a blockchain application, but it lacks the capability to actually process transactions
+    -This should be updated such that the workers each read a block of data from their file and calculate the merkle root prior to mining the data
+    -Using this method may require later optimizations so that the host doesn't get blocked on reading from the input files
+    -This method will also utilize a greater portion of the available memory copy bandwidth, which is currently drastically underutilized
+
+--Add Input File Details header
+  | PRIORITY: Medium
+  | Details:
+    -The input files currently just use a very large number of inputs to prevent ever becoming empty
+    -This may change if workers merkle hash the data in the input files
+    -A header in each input file with details such as file length would enable the program to preemptively discover if a longer input file is needed
+
+--Input File EOF Handling
+  | PRIORITY: Medium High
+  | Details:
+    -There is currently pseudo input file error handling in the program, but it does not always perform as needed
+    -The input files currently just use a very large number of inputs to prevent ever becoming empty, so EOF handling is currently not an issue
+    -When there is an EOF risk, the file reader should be updated to properly handle EOF, and stop a worker if an EOF occurs
 
 
 TODO Project Management
@@ -160,12 +182,7 @@ TODO PYTHON
 
 TODO MISCELLANEOUS
 
---Worker Variable Consolidation
-  | PRIORITY: Medium
-  | Details:
-    -The current code has a large number of variables which are currently independent, and quite a mess
-    -Update the code to group the variables together into structs, helping with code organization
-    -NOTE In progress to simplify variable management
+
 
 --Better Error Handling
   | PRIORITY: Medium
@@ -210,7 +227,10 @@ Changes that should be made to improve the code and eliminate stale content
     -These should be deleted when they are no longer of any use
 
 --Variable cleanup
+  | DATE: 1-18-2019
   | PRIORITY: Low Medium
+  | STATUS: IN-PROGRESS
+    -Completed for basic worker and parent variables by consolidating vars into WORKLOAD structs. More may be neccessary at a later point
   | Details:
     -Some of the variables used in the program are not neccessary, messy, or redundant, and should be optimized if they are of minimal risk
     -Examples include variable declarations midway through a function, variables which no longer serve a purpose in a specific context, or variables contain duplicate data
@@ -278,3 +298,18 @@ IDEA FUTURE IMPROVEMENTS
         -Lots of other features exist to make a complete application, and they will be added in as the project progresses.
         -Other potential features for different purposes other than cryptocurrencies may be a promising avenue of development
         -A sidechain similar to namecoin could be used to keep track of all the child chains, while also providing a barrier of entry to create a child chain, limiting the potential for abuse
+
+
+
+/*--------------------------------------------------------------------------------------------------------------------------------*/
+BACKLOG - Completed items, along with the completion date
+/*--------------------------------------------------------------------------------------------------------------------------------*/
+
+--Worker Variable Consolidation
+  | PRIORITY: Medium
+  | STATUS: COMPLETED 1-18-2019
+    -Worker and Parent variables were successfully consolidated into WORKLOAD structs
+    -This allows for simplified addition of mining variables
+  | Details:
+    -The current code has a large number of variables which are currently independent, and quite a mess
+    -Update the code to group the variables together into structs, helping with code organization
