@@ -9,7 +9,6 @@ Critical issues that have yet to be resolved
      -Timing updates blocked by too many operations being added to execute asynchronously
      -Can be resolved by removing events, but may arise later if more asynchronous stream operations are added
     | Solution: Restructure code to minimize queued operations
-      -Callbacks may help or hurt this depending on usage
       -Event Reduction could reduce unneccessarily queued items
       -Additional intermediate stages could reduce items added to the queue at one time
 
@@ -21,17 +20,15 @@ Bugs that currently exist in the program, arising under certain circumstances
   | DATE FOUND: 1-12-2019
   | DATE IDENTIFIED: 1-15-2019
   | DATE FIXED: N/A
-  | PRIORITY: High
+  | PRIORITY: Medium
   | DETAILS:
     -This bug presented itself through a complete halting of the mining process, with no new blocks after a substantial amount of time had passed
     -The worker kernels indicated a problem with the current time variable, as the kernel time updates showed no change over the course of several minutes
     -This bug was experienced near difficulty 0x1d00ffff (MODIFIER=0), with 8 or more workers
     -This problem persisted for timing stored in constant or global memory, on new and old miners
     -This bug can be replicated by running the miner with the settings: ./cuda_miner -diff 0 -w 8 (May not appear if you get lucky and multiple times per block arent needed)
-  | CAUSE: Most likely blocked by other kernel streams
-    -Possible explainations could involve blocking of the memory copy engines
-    -The bug doesn't occur at the same point for smaller architectures, and the time required to reach the point of failure doesnt matter
-    -It seems to be directly related to the difficulty level and the number of active workers/streams
+  | CAUSE:
+    -Blocked by adding timing events to too many concurrent streams, new timing methods are needed
   | DEBUGGING:
     -Using the default stream to directly obtain information on the timing update, it was found that the update becomes blocked until at least one worker completes its block
     -If all workers are working on blocks which require an updated time, the time will never update and the program will stall
@@ -69,15 +66,8 @@ Code improvements which are neccessary to have a fully functional program
   | Details:
     -Similar to the benchmark and testing functions, add profiling support to the main miner which shows the stream names/activity, and better displays the blocks mined and difficulty scaling
     -At a basic level, this would simply show the activity, while a more elegant display would use color scaling to better depict the changes in the miner over time
-
---Use Stream Callbacks
-  | PRIORITY: Low Medium
-  | Details:
-    -The current method of iterating over worker streams and looking for a stream that is ready is an unreliable process that prioritizes based on stream order.
-    -Callbacks could provide a better method for starting the next block, based on when each stream is ready instead of which one is next in line
-    -With callbacks added, the main process would primarily focus on updating constant variables and calling the parent stream when neccessary
-    -The downside is that this would require significant modifications to the existing code, and would probably be best implemented on another branch incase complications arise
-    -Callbacks may also make it easier to implement CPU multithreading later on
+    -NOTE Basic detailed profiling added
+    -TODO Add more informative color schemes and labels for blocks and difficulty scaling
 
 --Optimize Merkle Root calculations
   | PRIORITY: Medium
@@ -94,6 +84,16 @@ Code improvements which are neccessary to have a fully functional program
     -This should be updated such that the workers each read a block of data from their file and calculate the merkle root prior to mining the data
     -Using this method may require later optimizations so that the host doesn't get blocked on reading from the input files
     -This method will also utilize a greater portion of the available memory copy bandwidth, which is currently drastically underutilized
+
+--Use Stream Callbacks
+  | PRIORITY: Low
+  | Details:
+    -The current method of iterating over worker streams and looking for a stream that is ready is an unreliable process that prioritizes based on stream order.
+    -Callbacks could provide a better method for starting the next block, based on when each stream is ready instead of which one is next in line
+    -With callbacks added, the main process would primarily focus on updating constant variables and calling the parent stream when neccessary
+    -The downside is that this would require significant modifications to the existing code, and would probably be best implemented on another branch incase complications arise
+    -Callbacks may also make it easier to implement CPU multithreading later on
+    -NOTE CUDA functions can't be called from callbacks, so these would be best used to initiate other functions such as file I/O instead of timing
 
 
 TODO Project Management
@@ -165,6 +165,7 @@ TODO MISCELLANEOUS
   | Details:
     -The current code has a large number of variables which are currently independent, and quite a mess
     -Update the code to group the variables together into structs, helping with code organization
+    -NOTE In progress to simplify variable management
 
 --Better Error Handling
   | PRIORITY: Medium
