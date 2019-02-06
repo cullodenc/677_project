@@ -47,6 +47,22 @@ Bugs that currently exist in the program, arising under certain circumstances
 TODO CUDA
 Code improvements which are neccessary to have a fully functional program
 
+--Integrate New Mining Algorithm
+  | PRIORITY: High
+  | Details:
+    - A new benchmark kernel was created to improve the mining speed while maintaining a low memory overhead
+    - This kernel needs to be integrated into the main mining functions
+
+--Optimize Merkle Root calculations
+  | PRIORITY: Medium High
+  | Details:
+    -The merkle root operation is currently quite bulky on shared memory, and limited in its potential for performance and scaling
+    -Ideally, this algorithm would be adjusted to use built in shuffle functions to speed up the coalescing of data into the final thread
+    -Storing the data in texture memory could also help to improve the performance for bigger transaction sets
+  | SOLUTION NOTES:
+    - Use shuffle operations to coalesce hash data into a single thread
+    - Use the new mining operation for hashing 
+
 --Create Designated Copy Streams
   | PRIORITY: Medium High
   | Details:
@@ -75,13 +91,6 @@ Code improvements which are neccessary to have a fully functional program
     -At a basic level, this would simply show the activity, while a more elegant display would use color scaling to better depict the changes in the miner over time
     -TODO Add more informative color schemes and labels for blocks and difficulty scaling
           Re-organize profiling calls into functions to clean up the main host process code
-
---Optimize Merkle Root calculations
-  | PRIORITY: Medium
-  | Details:
-    -The merkle root operation is currently quite bulky on shared memory, and limited in its potential for performance and scaling
-    -Ideally, this algorithm would be adjusted to use built in shuffle functions to speed up the coalescing of data into the final thread
-    -Storing the data in texture memory could also help to improve the performance for bigger transaction sets
 
 --Use Stream Callbacks
   | PRIORITY: Low
@@ -304,6 +313,39 @@ IDEA FUTURE IMPROVEMENTS
 /*--------------------------------------------------------------------------------------------------------------------------------*/
 BACKLOG - Completed items, along with the completion date
 /*--------------------------------------------------------------------------------------------------------------------------------*/
+
+
+--Fix Benchmark Kernel
+  | PRIORITY: High
+  | STATUS: COMPLETED 2-5-2019
+    - Used atomic operations to add iterations per block, giving a more accurate metric
+  | Details:
+    - The benchmark kernel currently produces overinflated results if the register usage is higher than 32
+    - This is due to only 1 iteration count being taken from the first block, while in reality each block with have a slightly different iteration count
+
+
+--Fix Core Mining Kernel
+  | PRIORITY: High
+  | STATUS: COMPLETED 2-5-2019
+    - Reworked the kernel core to only use 32 registers per thread
+    - Added atomic operations to the main loops to prevent write conflicts
+      - Atomic flags also promote faster breaking from loops
+    - Kernel templates for the number of blocks enable the for loops to operate without additional memory overhead
+  | Details:
+    - The mining kernel is currently inefficient due to an overusage of registers due to a number of reasons:
+      - The order of accesses to variables can impact the number of registers allocated
+      - The method used to break out of the mining loop can drastically alter register usage
+    - The mining kernel is error prone at extrememly low difficulties, and is prone to multiple threads overwriting the result variables simultaneously, resulting in incorrect outputs
+    - The for loop needs a constant input for the maximum iteration and increment size, or else an additional 8 registers are used
+
+--Better Device Debugging
+  | PRIORITY: Medium
+  | STATUS: COMPLETED 2-3-2019
+    - Added conditional compiler option DEV_DEBUG which enables a variety of print statements when passed to nvcc with value 1, 2, or 3
+  | Details:
+    - Print statements on the device side are expensive, and can add unwanted registers if located in an active location
+    - A method for better device debugging is needed
+
 
 --Worker Variable Consolidation
   | PRIORITY: Medium
