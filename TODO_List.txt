@@ -49,6 +49,9 @@ Code improvements which are neccessary to have a fully functional program
 
 --Integrate New Mining Algorithm
   | PRIORITY: High
+  | STATUS: IN PROGRESS
+    - New functions have been successfully integrated into the mining core[2-7-2019]
+    - Cleanup of old functions still required
   | Details:
     - A new benchmark kernel was created to improve the mining speed while maintaining a low memory overhead
     - This kernel needs to be integrated into the main mining functions
@@ -61,7 +64,7 @@ Code improvements which are neccessary to have a fully functional program
     -Storing the data in texture memory could also help to improve the performance for bigger transaction sets
   | SOLUTION NOTES:
     - Use shuffle operations to coalesce hash data into a single thread
-    - Use the new mining operation for hashing 
+    - Use the new mining operation for hashing [DONE 2-7-2019]
 
 --Create Designated Copy Streams
   | PRIORITY: Medium High
@@ -144,6 +147,16 @@ TODO Project Management
     -Although combining the code into a single file initially provided an easier means of managing everying, it has since become cumbersome due to the large file size.
     -Once the core code has been updated to the extent that system wide changes are no longer needed, it would be ideal to split the file by functionality and scope
     -This requires the use of a makefile to simplify the linking process, and eliminate any performance losses that come from external device functions
+
+--Implement Macro for Logging
+  | PRIORITY: Low
+  | Dependencies: makefile building
+  | Details:
+    -The current method of printing logs is messy and error prone
+    -This is primarily due to the use of string concatenation to create the log messages
+    -Macro functions should be created to simplify the logging process
+    -This fix will need to include an overhaul of all the calls to logging functions
+    -The debug function will most likely need the debug variable passed in at compilation
 
 --Update Documentation
   | PRIORITY: Medium

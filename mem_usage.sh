@@ -5,6 +5,6 @@
 #nvcc -Xptxas -v -gencode arch=compute_60,code=sm_60 cuda_miner.cu -o cuda_miner
 
 # GENERATE LINE NUMBER INFORMATION FOR DEVICE CODE
-nvcc -lineinfo -Xptxas -v -gencode arch=compute_60,code=sm_60 cuda_miner.cu -o cuda_miner
+nvcc -D MEM_CHECK -lineinfo -Xptxas -v -gencode arch=compute_60,code=sm_60 cuda_miner.cu -o cuda_miner
 # DEBUG DEVICE OPTIONS ENABLED
 #nvcc -G -Xptxas -v -gencode arch=compute_60,code=sm_60 cuda_miner.cu -o cuda_miner
