@@ -443,6 +443,18 @@ __constant__ WORD msgSchedule_64B[64] = {
 	0x4f0d0f04, 0x2627484e, 0x310128d2, 0xc668b434, 0x420841cc, 0x62d311b8, 0xe59ba771, 0x85a7a484
 };
 
+// SPLIT MESSAGE SCHEDULE
+__constant__ WORD msgSchedule_64B_s[4][16] = {
+	{0x80000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000200},
+	{0x80000000, 0x01400000, 0x00205000, 0x00005088, 0x22000800, 0x22550014, 0x05089742, 0xa0000020,
+	 0x5a880000, 0x005c9400, 0x0016d49d, 0xfa801f00, 0xd33225d0, 0x11675959, 0xf6e6bfda, 0xb30c1549},
+	{0x08b2b050, 0x9d7c4c27, 0x0ce2a393, 0x88e6e1ea, 0xa52b4335, 0x67a16f49, 0xd732016f, 0x4eeb2e91,
+	 0x5dbf55e5, 0x8eee2335, 0xe2bc5ec2, 0xa83f4394, 0x45ad78f7, 0x36f3d0cd, 0xd99c05e8, 0xb0511dc7},
+	{0x69bc7ac4, 0xbd11375b, 0xe3ba71e5, 0x3b209ff2, 0x18feee17, 0xe25ad9e7, 0x13375046, 0x0515089d,
+	 0x4f0d0f04, 0x2627484e, 0x310128d2, 0xc668b434, 0x420841cc, 0x62d311b8, 0xe59ba771, 0x85a7a484}
+};
+
 __constant__ WORD msgSchedule_const_64B[64] = {
 	0xc28a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
 	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf374,
@@ -456,6 +468,14 @@ __constant__ WORD msgSchedule_const_64B[64] = {
 
 // PRECOMPUTED SCHEDULE PADDING VALUES FOR 32 BYTE BLOCK HASH
 __constant__ WORD msgSchedule_32B[16] = {
+	0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	0x80000000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00000000, 0x00000100
+};
+
+// COPY PRECOMPUTED SCHEDULE PADDING VALUES FOR 32 BYTE BLOCK HASH
+__constant__ WORD msgSchedule_32B_cpy[16] = {
 	0x00000000, 0x00000000, 0x00000000, 0x00000000,
 	0x00000000, 0x00000000, 0x00000000, 0x00000000,
 	0x80000000, 0x00000000, 0x00000000, 0x00000000,
@@ -687,6 +707,7 @@ int TEST_COUNT = 0;
 /***************************************************************************************************************************************************************************/
 #define AVAILABLE_BLOCKS 20 	// TOTAL NUMBER OF POSSIBLE CONCURRENT BLOCKS
 #define NUM_THREADS 1024
+#define MERKLE_THREADS 512
 #define MAX_BLOCKS 16					// MAXIMUM NUMBER OF BLOCKS TO BE ALLOCATED FOR WORKERS
 #define PARENT_BLOCK_SIZE 16
 #define DIFFICULTY_LIMIT 32
@@ -828,6 +849,10 @@ __host__ void encodeHex(BYTE * str, BYTE * hex, int len);
 __host__ void decodeHex(BYTE * hex, BYTE * str, int len);
 __host__ void printHex(BYTE * hex, int len);
 __host__ void printHexFile(FILE * outfile, BYTE * hex, int len);
+__host__ void printHashW(WORD * hash);
+__host__ void printWords(WORD * hash, int len);
+__host__ void host_convertHash_Word2Byte(WORD * in, BYTE* out);
+__host__ void host_convertHash_Byte2Word(BYTE * in, WORD* out, int len);
 /*------------------------------------------------------------------------STATUS LOGGING FUNCTIONS-------------------------------------------------------------------------*/
 __host__ void printLog(const char* msg);
 __host__ void printDebug(const char * msg);
@@ -871,7 +896,7 @@ __global__ void benchmarkKernel(BYTE * block_d);
 __global__ void miningBenchmarkKernel(BYTE * block_d, BYTE * hash_d, int * flag_d, int * total_iterations);
 __global__ void hashTestKernel(BYTE * test_block, BYTE * result_block, int size);
 __global__ void hashTestMiningKernel(BYTE * test_block, BYTE * result_block, int * success);
-__global__ void hashTestDoubleKernel(BYTE * test_block, BYTE * result_block, int sel);
+
 
 /*-----------------------------------------------------------------------------MINING FUNCTIONS----------------------------------------------------------------------------*/
 __global__ void genTestHashes(BYTE * hash_df, BYTE * seed, int num_blocks);
@@ -896,6 +921,7 @@ __device__ void printHash(BYTE * hash);
 __device__ void printBlock(BYTE * hash);
 __device__ void printSplitBlock(BYTE * hash, BYTE * split);
 __device__ __inline__ void convertHash_Word2Byte(WORD * in, BYTE* out);
+__device__ __inline__ void convertHash_Byte2Word(BYTE * in, WORD* out, int len);
 
 /*-----------------------------------------------------------------------------SHA256 FUNCTIONS----------------------------------------------------------------------------*/
 
@@ -924,6 +950,16 @@ __global__ void hashTestMiningKernel_new(BYTE * test_block, BYTE * result_block,
 
 template <int blocks>
 __global__ void miningBenchmarkKernel_test(WORD * block_d, WORD * result_d, BYTE * hash_d, int * flag_d, int * total_iterations);
+
+template <int sel>
+__global__ void hashTestDoubleKernel(WORD * test_block, WORD * result_block);
+
+__device__ __inline__ void sha256_merkleHash_64B(WORD * hash_data, WORD * state);
+__device__ __inline__ void sha256_merkleHash_32B(WORD * hash_data, WORD * state);
+
+__global__ void getMerkleRoot_new(WORD * pHash_d, WORD * block_d, int buffer_blocks,  int tree_size);
+
+__host__ void testMerkleHash_new(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE * test_d, BYTE * result_h, BYTE * result_d, int test_size, char ** logStr);
 
 
 /***************************************************************************************************************************************************************************/
@@ -955,6 +991,17 @@ __global__ void miningBenchmarkKernel_test(WORD * block_d, WORD * result_d, BYTE
 	}																																																											\
 }
 
+
+#define HASH_DOUBLE_KERNEL(sel, stream, test_block, result_block){							\
+	switch (sel) {																																\
+		case 32:																																		\
+			hashTestDoubleKernel<32><<<1, 1, 0, stream>>>(test_block, result_block);	\
+			break;																																		\
+		case 64:																																		\
+			hashTestDoubleKernel<64><<<1, 1, 0, stream>>>(test_block, result_block);	\
+			break;																																		\
+	}																																							\
+}
 
 // HOST INITIALIZATION, BEGIN WITH PARSING COMMAND LINE ARGUMENTS
 int main(int argc, char *argv[]){
@@ -2033,7 +2080,8 @@ __host__ void hostFunctionalTest(void){
 		POP_DOMAIN(handle);
 	POP_DOMAIN(handle);
 
-/*
+	printf("\n\n\n\nMERKLE TESTING!!!!\n\n\n\n");
+
 	// VARIOUS DIFFICULTIES TEST
 	PUSH_DOMAIN(handle, "MERKLE TEST", -2, 5, 5);
 		// DOUBLE HASH 32B | 32B TEST
@@ -2052,11 +2100,12 @@ __host__ void hostFunctionalTest(void){
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
 
+
 		// MERKLE HASH TESTS
 		PUSH_DOMAIN(handle, "MERKLE 1", -2, 5, 0);
 			strcpy((char*)merkle_str, "6be0ad2cd9b2014644504878974800baf96d52f0767d5ba68264139f95df4869");
 			strcpy((char*)correct_str, "ba26064e7dad783f2e3a49071e674accc2efcaf45254b42149abf861dfce033f");
-			testMerkleHash(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 1, &logStr);
+			testMerkleHash_new(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 1, &logStr);
 			sprintf(logMsg, "MERKLE 1 HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
@@ -2064,7 +2113,7 @@ __host__ void hostFunctionalTest(void){
 			strcpy((char*)merkle_str, "6be0ad2cd9b2014644504878974800baf96d52f0767d5ba68264139f95df4869");
 			strcat((char*)merkle_str, "7a97ceb4c13ae5ecd87317d3bce4305af9de043800b9e0dde83fb0967c52b162");
 			strcpy((char*)correct_str, "f5eb35cd8091643a174f0e7eda768f6f51a5d3e61691eb1b302653c7149cff2c");
-			testMerkleHash(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 2, &logStr);
+			testMerkleHash_new(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 2, &logStr);
 			sprintf(logMsg, "MERKLE 2-1 HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
@@ -2072,7 +2121,7 @@ __host__ void hostFunctionalTest(void){
 			strcpy((char*)merkle_str, "4a999e696ac674fdbf7a94876d9e230aa31ba4282d21e564d064e5950afb225e");
 			strcat((char*)merkle_str, "a16da6f6849fe9d9e6a02667d9bcce28b411b64bfad7869d136112f9dfabeeb8");
 			strcpy((char*)correct_str, "561dbd4591dfbd2352da56036881b18bf8e1dc7771397b807bba500449ee8243");
-			testMerkleHash(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 2, &logStr);
+			testMerkleHash_new(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 2, &logStr);
 			sprintf(logMsg, "MERKLE 2-2 HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
@@ -2082,7 +2131,7 @@ __host__ void hostFunctionalTest(void){
 			strcat((char*)merkle_str, "4a999e696ac674fdbf7a94876d9e230aa31ba4282d21e564d064e5950afb225e");
 			strcat((char*)merkle_str, "a16da6f6849fe9d9e6a02667d9bcce28b411b64bfad7869d136112f9dfabeeb8");
 			strcpy((char*)correct_str, "9469e5f693434dab893fbd7adc376a1df75011bde71aa1b30e5fd37db038f7f4");
-			testMerkleHash(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 4, &logStr);
+			testMerkleHash_new(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 4, &logStr);
 			sprintf(logMsg, "MERKLE 4-1 HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
@@ -2092,7 +2141,7 @@ __host__ void hostFunctionalTest(void){
 			strcat((char*)merkle_str, "8a301aceff3f16a6c441237492c2b358c7e2346cb299be4c6b88fc0c4f949bec");
 			strcat((char*)merkle_str, "4ee8b360b8a9a9b2c2f0ab3f02ca3da20fd1b2fd96a4c74b991a4b98c544feed");
 			strcpy((char*)correct_str, "9b3b36b2099e2715c5eab4b54c4def46119726bffb0451936ec49a6a56f5d55c");
-			testMerkleHash(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 4, &logStr);
+			testMerkleHash_new(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 4, &logStr);
 			sprintf(logMsg, "MERKLE 4-2 HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
@@ -2106,7 +2155,7 @@ __host__ void hostFunctionalTest(void){
 			strcat((char*)merkle_str, "8a301aceff3f16a6c441237492c2b358c7e2346cb299be4c6b88fc0c4f949bec");
 			strcat((char*)merkle_str, "4ee8b360b8a9a9b2c2f0ab3f02ca3da20fd1b2fd96a4c74b991a4b98c544feed");
 			strcpy((char*)correct_str, "e3ef39f376e7e60d21f19d55571c93096ba841c7edfbbbd60d304521dfa6f679");
-			testMerkleHash(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 8, &logStr);
+			testMerkleHash_new(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 8, &logStr);
 			sprintf(logMsg, "MERKLE 8-1 HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
@@ -2120,7 +2169,7 @@ __host__ void hostFunctionalTest(void){
 			strcat((char*)merkle_str, "72ea245bf08809e7645e9fcf8b02cf3497e2715bbb9214d1896aaa6069fd611e");
 			strcat((char*)merkle_str, "f4456bc878b17beee82089ce413ec2362d51d3e01ba9071a420bd391a5421045");
 			strcpy((char*)correct_str, "a3dd4163da9d676e1c59bc46fbd9f2489fe8d638ce6c04349a14ff31f2245c41");
-			testMerkleHash(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 8, &logStr);
+			testMerkleHash_new(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 8, &logStr);
 			sprintf(logMsg, "MERKLE 8-2 HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
@@ -2142,13 +2191,13 @@ __host__ void hostFunctionalTest(void){
 			strcat((char*)merkle_str, "72ea245bf08809e7645e9fcf8b02cf3497e2715bbb9214d1896aaa6069fd611e");
 			strcat((char*)merkle_str, "f4456bc878b17beee82089ce413ec2362d51d3e01ba9071a420bd391a5421045");
 			strcpy((char*)correct_str, "55ac8c4a3074053c9ceb102416cb6e8e78dfc84df3369150203744d638b90d1b");
-			testMerkleHash(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 16, &logStr);
+			testMerkleHash_new(merkle_str, correct_str, merkle_h, merkle_d, result_h, result_d, 16, &logStr);
 			sprintf(logMsg, "MERKLE 16 HASH TEST: \nINPUT: %s \n \t%s\n\n", test_str, logStr);
 			strcat(logResult, logMsg);
 		POP_DOMAIN(handle);
 
 	POP_DOMAIN(handle);
-*/
+
 	// DESTROY FUNCTIONAL TEST DOMAIN
 	DOMAIN_DESTROY(handle);
 
@@ -2291,32 +2340,59 @@ __host__ void testDoubleHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h,
 	cudaStream_t test_stream;
 	cudaStreamCreate(&test_stream);
 
+	WORD * test_input_h;
+	WORD * test_input_d;
+	WORD * test_hash_h;
+	WORD * test_hash_d;
+	int word_size = test_size/4;
+
+	test_input_h = (WORD *)malloc(sizeof(WORD)*word_size);
+	cudaMalloc((void **) &test_input_d, sizeof(WORD)*word_size);
+	test_hash_h = (WORD *)malloc(HASH_W_SIZE);
+	cudaMalloc((void **) &test_hash_d, HASH_W_SIZE);
+
 	// ADD NAME TO STREAM
 	char stream_name[50];
 	sprintf(stream_name, "TEST STREAM %i", TEST_COUNT);
 	TEST_COUNT++;
 	NAME_STREAM(test_stream, stream_name);
 
+	encodeHex(test_str, test_h, test_size*2);
+	host_convertHash_Byte2Word(test_h, test_input_h, word_size);
+	cudaMemcpyAsync( test_input_d,  test_input_h, sizeof(WORD)*word_size, cudaMemcpyHostToDevice, test_stream);
+	printf("HEX INPUT!! :\n");
+	printHex(test_h, test_size);
+	printf("HASH TEST INPUT SIZE %i! \n", word_size);
+	printWords(test_input_h, word_size);
+
+/*
 	memset(test_h, 0, BLOCK_SIZE);
 	cudaMemcpyAsync(result_d, test_h, HASH_SIZE, cudaMemcpyHostToDevice, test_stream);
-	encodeHex(test_str, test_h, test_size*2);
+
 
 	cudaMemcpyAsync(test_d, test_h, BLOCK_SIZE, cudaMemcpyHostToDevice, test_stream);
+/*
 	if(test_size == 32){
 		hashTestDoubleKernel<<<1, 1, 0, test_stream>>>(test_d, result_d, 0);
 	}
 	else if(test_size == 64){
-		hashTestDoubleKernel<<<1, 1, 0, test_stream>>>(test_d, result_d, 1);
+*/
+	HASH_DOUBLE_KERNEL(test_size, test_stream, test_input_d, test_hash_d);
+//	hashTestDoubleKernel<<<1, 1, 0, test_stream>>>(test_input_d, test_hash_d);
+/*
 	}
 	else{
 		sprintf(*logStr, "ERROR: INCORRECT PARAMETER SIZE FOR DOUBLE HASH TEST! \n");
 		return;
 	}
+*/
 	cudaDeviceSynchronize();
-	cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost, test_stream);
+	//cudaMemcpyAsync(result_h, result_d, HASH_SIZE, cudaMemcpyDeviceToHost, test_stream);
+	cudaMemcpyAsync(test_hash_h, test_hash_d, HASH_W_SIZE, cudaMemcpyDeviceToHost, test_stream);
 	cudaDeviceSynchronize();
 	cudaStreamDestroy(test_stream);
-
+	printHashW(test_hash_h);
+	host_convertHash_Word2Byte(test_hash_h, result_h);
 	// Compare results
 	decodeHex(result_h, result_str, 32);
 	encodeHex(correct_str, correct_hex, 64);
@@ -2326,6 +2402,11 @@ __host__ void testDoubleHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h,
 	}else{
 		sprintf(*logStr, "FAILED\n \t\tEXPECTED: %s\n \t\tRECEIVED: %s", correct_str, result_str);
 	}
+
+	free(test_input_h);
+	cudaFree(test_input_d);
+	free(test_hash_h);
+	cudaFree(test_hash_d);
 	return;
 }
 
@@ -2356,6 +2437,7 @@ __host__ void testMerkleHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h,
 	cudaMemcpyAsync(test_d, test_h, HASH_SIZE*test_size, cudaMemcpyHostToDevice, test_stream);
 	int tree_size = pow(2.0, ceil(log2((double)test_size)));
 	getMerkleRoot_byte<<<1, NUM_THREADS, 0, test_stream>>>(test_d, block_d, test_size, tree_size);
+
 	cudaMemcpyAsync(result_h, &(block_d[36]), HASH_SIZE, cudaMemcpyDeviceToHost, test_stream);
 
 	cudaDeviceSynchronize();
@@ -2370,6 +2452,65 @@ __host__ void testMerkleHash(BYTE * test_str, BYTE * correct_str, BYTE * test_h,
 	}else{
 		sprintf(*logStr, "FAILED\n \t\tEXPECTED: %s\n \t\tRECEIVED: %s", correct_str, result_str);
 	}
+	return;
+}
+
+__host__ void testMerkleHash_new(BYTE * test_str, BYTE * correct_str, BYTE * test_h, BYTE * test_d, BYTE * result_h, BYTE * result_d, int test_size, char ** logStr){
+	BYTE result_str[65];
+	BYTE correct_hex[32];
+	WORD * block_d;
+	cudaMalloc((void **) &block_d, BLOCK_W_SIZE);
+	WORD * block_h;
+	block_h = (WORD*)malloc(BLOCK_W_SIZE);
+
+	WORD * hash_h;
+	WORD * hash_d;
+	hash_h = (WORD*)malloc(sizeof(WORD)*8*test_size);
+	cudaMalloc((void **) &hash_d, sizeof(WORD)*8*test_size);
+
+	int hash_match;
+	cudaStream_t test_stream;
+	cudaStreamCreate(&test_stream);
+
+	// ADD NAME TO STREAM
+	char stream_name[50];
+	sprintf(stream_name, "TEST STREAM %i", TEST_COUNT);
+	TEST_COUNT++;
+	NAME_STREAM(test_stream, stream_name);
+
+	memset(result_h, 0, HASH_SIZE);
+	cudaMemcpyAsync(result_d, result_h, HASH_SIZE, cudaMemcpyHostToDevice, test_stream);
+	printf("MERKLE TEST INPUTS: \n");
+	for(int i = 0; i < test_size; i++){
+		encodeHex(&test_str[i*64], &test_h[i*32], 64);
+		host_convertHash_Byte2Word(&test_h[i*32], &hash_h[i*8], 8);
+		printHex(&test_h[i*32], 32);
+	}
+	cudaMemcpyAsync(hash_d, hash_h, sizeof(WORD)*8*test_size, cudaMemcpyHostToDevice, test_stream);
+	//cudaMemcpyAsync(test_d, test_h, HASH_SIZE*test_size, cudaMemcpyHostToDevice, test_stream);
+	int tree_size = pow(2.0, ceil(log2((double)test_size)));
+	getMerkleRoot_new<<<1, MERKLE_THREADS, 0, test_stream>>>(hash_d, block_d, test_size, tree_size);
+
+	cudaMemcpyAsync(block_h, block_d, HASH_SIZE, cudaMemcpyDeviceToHost, test_stream);
+	host_convertHash_Word2Byte(block_h, result_h);
+
+	cudaDeviceSynchronize();
+	cudaStreamDestroy(test_stream);
+
+	// Compare results
+	decodeHex(result_h, result_str, 32);
+	encodeHex(correct_str, correct_hex, 64);
+	hash_match = strcmp((char*)result_str, (char*)correct_str);
+	if(hash_match == 0){
+		sprintf(*logStr, "SUCCESS");
+	}else{
+		sprintf(*logStr, "FAILED\n \t\tEXPECTED: %s\n \t\tRECEIVED: %s", correct_str, result_str);
+	}
+	free(hash_h);
+	cudaFree(hash_d);
+	free(block_h);
+	cudaFree(block_d);
+
 	return;
 }
 
@@ -3426,6 +3567,33 @@ __host__ void printHashW(WORD * hash){
   return;
 }
 
+__host__ void printWords(WORD * hash, int len){
+	for(int i = 0; i < len; i++){
+		printf("%08x", hash[i]);
+	}
+	printf("\n");
+}
+
+__host__ void host_convertHash_Word2Byte(WORD * in, BYTE* out){
+	#pragma unroll 4
+	for (int i = 0; i < 4; ++i) {
+		out[i]      = (in[0] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 4]  = (in[1] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 8]  = (in[2] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 12] = (in[3] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 16] = (in[4] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 20] = (in[5] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 24] = (in[6] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 28] = (in[7] >> (24 - i * 8)) & 0x000000ff;
+	}
+}
+
+__host__ void host_convertHash_Byte2Word(BYTE * in, WORD* out, int len){
+	for (int i = 0; i < len; ++i) {
+		out[i] = (in[i*4] << 24) | (in[i*4+1] << 16) | (in[i*4+2] << 8) | (in[i*4+3]);
+	}
+}
+
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /*************************************************************************STATUS LOGGING FUNCTIONS**************************************************************************/
 // FUNCTION TO PRINT LOG MESSAGES WITH TIMESTAMP
@@ -4029,11 +4197,28 @@ __global__ void hashTestMiningKernel(BYTE * test_block, BYTE * result_block, int
 	return;
 }
 
-__global__ void hashTestDoubleKernel(BYTE * test_block, BYTE * result_block, int sel){
-	if(sel == 0){
-		sha256_doubleHash_32_32(test_block, result_block);
-	} else{
-		sha256_doubleHash_64_32(test_block, result_block);
+template <int sel>
+__global__ void hashTestDoubleKernel(WORD * test_block, WORD * result_block){
+	int i;
+	__shared__ WORD hash_result[8];
+	__shared__ WORD data_in[16];
+
+	if(sel == 32){
+		#pragma unroll 8
+		for(i = 0; i < 8; i++){
+			data_in[i] = test_block[i];
+		}
+		sha256_merkleHash_32B(data_in, hash_result);
+	}else if(sel == 64){
+		#pragma unroll 16
+		for(i = 0; i < 16; i++){
+			data_in[i] = test_block[i];
+		}
+		sha256_merkleHash_64B(data_in, hash_result);
+	}
+	#pragma unroll 8
+	for(i = 0; i < 16; i++){
+		result_block[i] = hash_result[i];
 	}
 	return;
 }
@@ -4500,6 +4685,57 @@ __global__ void getMerkleRoot_word(BYTE * pHash_d, WORD * block_d, int buffer_bl
   }
 }
 
+__global__ void getMerkleRoot_new(WORD * pHash_d, WORD * block_d, int buffer_blocks,  int tree_size){
+	// surface height is constant
+
+  // Shared memory for sharing hash results
+  __shared__ WORD local_mem_in[MERKLE_THREADS][16];
+  __shared__ WORD local_mem_out[MERKLE_THREADS][8];
+
+	WORD * local_in;
+	WORD * local_out;
+	unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	unsigned int offset = idx * 8;
+
+	if(threadIdx.x < MERKLE_THREADS){
+		local_in = local_mem_in[threadIdx.x];
+		local_out = local_mem_out[threadIdx.x];
+
+		if(threadIdx.x < buffer_blocks){
+		 	sha256_merkleHash_32B(&pHash_d[offset], local_out);
+
+			printf("THREAD %i LOCAL OUT: %08x%08x%08x%08x%08x%08x%08x%08x\n", threadIdx.x, local_out[0],local_out[1],local_out[2],local_out[3],local_out[4],local_out[5],local_out[6],local_out[7]);
+			//#pragma unroll 5
+			for(int i = 2; i <= tree_size; i*=2){
+	      if(threadIdx.x % i == 0){
+	        int mid = i/2;
+	        if(threadIdx.x + mid < buffer_blocks){
+	          #pragma unroll 8
+	          for(int j = 0; j < 8; j++){
+	            local_in[j] = local_out[j];
+	            local_in[8+j] = local_mem_out[threadIdx.x+mid][j];
+	          }
+					}else{ // HASH TOGETHER DUPLICATES FOR UNMATCHED BRANCHES
+	          #pragma unroll 8
+	          for(int j = 0; j < 8; j++){
+	            local_in[j] = local_out[j];
+	            local_in[8+j]= local_out[j];
+	          }
+	        }
+					sha256_merkleHash_64B(local_in, local_out);
+					printf("THREAD %i LOCAL OUT: %08x%08x%08x%08x%08x%08x%08x%08x\n", threadIdx.x, local_out[0],local_out[1],local_out[2],local_out[3],local_out[4],local_out[5],local_out[6],local_out[7]);
+				//1
+	      }
+	    } //END FOR LOOP
+			if(threadIdx.x == 0){
+				#pragma unroll 8
+				for(int i = 0; i < 8; i++){
+					block_d[i] = local_out[i];
+				}
+			}
+		}	// END BUFFER IF
+	} // END IF
+}
 
 /********************************************************************************************************************************************************************************************/
 /********************************************************************************************************************************************************************************************/
@@ -4594,6 +4830,12 @@ __device__ __inline__ void convertHash_Word2Byte(WORD * in, BYTE* out){
 		out[i + 20] = (in[5] >> (24 - i * 8)) & 0x000000ff;
 		out[i + 24] = (in[6] >> (24 - i * 8)) & 0x000000ff;
 		out[i + 28] = (in[7] >> (24 - i * 8)) & 0x000000ff;
+	}
+}
+
+__device__ __inline__ void convertHash_Byte2Word(BYTE * in, WORD* out, int len){
+	for (int i = 0; i < len; ++i) {
+		out[i] = (in[i*4] << 24) | (in[i*4+1] << 16) | (in[i*4+2] << 8) | (in[i*4+3]);
 	}
 }
 
@@ -5626,87 +5868,53 @@ __device__ __inline__ void sha256_mining_transform_single_noatom_1d_state(WORD s
 		state[4] = state[0] + t1;
 		state[0] = t1 + t2;
 	}
-/*
-	t1 = GET_T1(state[4],state[5],state[6],state[7], k_s[offset][0], m[0]);
-	t2 = GET_T2(state[0],state[1],state[2]);
-	state[7] = state[3] + t1;
+}
+
+__device__ __inline__ void sha256_mining_transform_single_noatom_1d_state_init(WORD state[8], WORD init[8], WORD m[], int offset){
+	BYTE i;
+	WORD t1, t2;
+	t1 = GET_T1(init[4],init[5],init[6],init[7],  k_s[offset][0], m[0]);
+	t2 = GET_T2(init[0],init[1],init[2]);
+	state[7] = init[3] + t1;
 	state[3] = t1 + t2;
 
-	t1 = GET_T1(state[7],state[4],state[5],state[6], k_s[offset][1], m[1]);
-	t2 = GET_T2(state[3],state[0],state[1]);
-	state[6] = state[2] + t1;
+	t1 = GET_T1(state[7],init[4],init[5],init[6], k_s[offset][1], m[1]);
+	t2 = GET_T2(state[3],init[0],init[1]);
+	state[6] = init[2] + t1;
 	state[2] = t1 + t2;
 
-	t1 = GET_T1(state[6],state[7],state[4],state[5], k_s[offset][2], m[2]);
-	t2 = GET_T2(state[2],state[3],state[0]);
-	state[5] = state[1] + t1;
+	t1 = GET_T1(state[6],state[7],init[4],init[5], k_s[offset][2], m[2]);
+	t2 = GET_T2(state[2],state[3],init[0]);
+	state[5] = init[1] + t1;
 	state[1] = t1 + t2;
 
-	t1 = GET_T1(state[5],state[6],state[7],state[4], k_s[offset][3], m[3]);
+	t1 = GET_T1(state[5],state[6],state[7],init[4], k_s[offset][3], m[3]);
 	t2 = GET_T2(state[1],state[2],state[3]);
-	state[4] = state[0] + t1;
+	state[4] = init[0] + t1;
 	state[0] = t1 + t2;
 
-	t1 = GET_T1(state[4],state[5],state[6],state[7], k_s[offset][4], m[4]);
-	t2 = GET_T2(state[0],state[1],state[2]);
-	state[7] = state[3] + t1;
-	state[3] = t1 + t2;
+	#pragma unroll 3
+	for (i = 4; i < 16; i+=4) {
+		t1 = GET_T1(state[4],state[5],state[6],state[7], k_s[offset][i], m[i]);
+		t2 = GET_T2(state[0],state[1],state[2]);
+		state[7] = state[3] + t1;
+		state[3] = t1 + t2;
 
-	t1 = GET_T1(state[7],state[4],state[5],state[6], k_s[offset][5], m[5]);
-	t2 = GET_T2(state[3],state[0],state[1]);
-	state[6] = state[2] + t1;
-	state[2] = t1 + t2;
+		t1 = GET_T1(state[7],state[4],state[5],state[6], k_s[offset][i+1], m[i+1]);
+		t2 = GET_T2(state[3],state[0],state[1]);
+		state[6] = state[2] + t1;
+		state[2] = t1 + t2;
 
-	t1 = GET_T1(state[6],state[7],state[4],state[5], k_s[offset][6], m[6]);
-	t2 = GET_T2(state[2],state[3],state[0]);
-	state[5] = state[1] + t1;
-	state[1] = t1 + t2;
+		t1 = GET_T1(state[6],state[7],state[4],state[5], k_s[offset][i+2], m[i+2]);
+		t2 = GET_T2(state[2],state[3],state[0]);
+		state[5] = state[1] + t1;
+		state[1] = t1 + t2;
 
-	t1 = GET_T1(state[5],state[6],state[7],state[4], k_s[offset][7], m[7]);
-	t2 = GET_T2(state[1],state[2],state[3]);
-	state[4] = state[0] + t1;
-	state[0] = t1 + t2;
-
-	t1 = GET_T1(state[4],state[5],state[6],state[7], k_s[offset][8], m[8]);
-	t2 = GET_T2(state[0],state[1],state[2]);
-	state[7] = state[3] + t1;
-	state[3] = t1 + t2;
-
-	t1 = GET_T1(state[7],state[4],state[5],state[6], k_s[offset][9], m[9]);
-	t2 = GET_T2(state[3],state[0],state[1]);
-	state[6] = state[2] + t1;
-	state[2] = t1 + t2;
-
-	t1 = GET_T1(state[6],state[7],state[4],state[5], k_s[offset][10], m[10]);
-	t2 = GET_T2(state[2],state[3],state[0]);
-	state[5] = state[1] + t1;
-	state[1] = t1 + t2;
-
-	t1 = GET_T1(state[5],state[6],state[7],state[4], k_s[offset][11], m[11]);
-	t2 = GET_T2(state[1],state[2],state[3]);
-	state[4] = state[0] + t1;
-	state[0] = t1 + t2;
-
-	t1 = GET_T1(state[4],state[5],state[6],state[7], k_s[offset][12], m[12]);
-	t2 = GET_T2(state[0],state[1],state[2]);
-	state[7] = state[3] + t1;
-	state[3] = t1 + t2;
-
-	t1 = GET_T1(state[7],state[4],state[5],state[6], k_s[offset][13], m[13]);
-	t2 = GET_T2(state[3],state[0],state[1]);
-	state[6] = state[2] + t1;
-	state[2] = t1 + t2;
-
-	t1 = GET_T1(state[6],state[7],state[4],state[5], k_s[offset][14], m[14]);
-	t2 = GET_T2(state[2],state[3],state[0]);
-	state[5] = state[1] + t1;
-	state[1] = t1 + t2;
-
-	t1 = GET_T1(state[5],state[6],state[7],state[4], k_s[offset][15], m[15]);
-	t2 = GET_T2(state[1],state[2],state[3]);
-	state[4] = state[0] + t1;
-	state[0] = t1 + t2;
-	*/
+		t1 = GET_T1(state[5],state[6],state[7],state[4], k_s[offset][i+3], m[i+3]);
+		t2 = GET_T2(state[1],state[2],state[3]);
+		state[4] = state[0] + t1;
+		state[0] = t1 + t2;
+	}
 }
 
 __device__ __inline__ void hashBlock_noatom(WORD * base, WORD * state, WORD * m){
@@ -5727,6 +5935,57 @@ __device__ __inline__ void hashBlock_noatom(WORD * base, WORD * state, WORD * m)
 	#pragma unroll 8
 	for(i=0; i < 8; i++){
 		state[i] += base[i];
+	}
+}
+
+__device__ __inline__ void hashBlock_noatom_init(WORD * state, WORD * m){
+	int i;
+	sha256_mining_transform_single_noatom_1d_state_init(state, i_state, m, 0);
+	scheduleExpansion_short(m);
+	sha256_mining_transform_single_noatom_1d_state(state, m, 1);
+	scheduleExpansion_short(m);
+	sha256_mining_transform_single_noatom_1d_state(state, m, 2);
+	scheduleExpansion_short(m);
+	sha256_mining_transform_single_noatom_1d_state(state, m, 3);
+
+	#pragma unroll 8
+	for(i=0; i < 8; i++){
+		state[i] += i_state[i];
+	}
+}
+
+__device__ __inline__ void hashBlock_64B(WORD * data, WORD * state){
+	int i;
+	WORD m[16];
+	WORD state_i[8];
+
+	#pragma unroll 16
+	for(i = 0; i < 16; i++){
+		m[i] = data[i];
+	}
+
+	sha256_mining_transform_single_noatom_1d_state_init(state, i_state, m, 0);
+	scheduleExpansion_short(m);
+	sha256_mining_transform_single_noatom_1d_state(state, m, 1);
+	scheduleExpansion_short(m);
+	sha256_mining_transform_single_noatom_1d_state(state, m, 2);
+	scheduleExpansion_short(m);
+	sha256_mining_transform_single_noatom_1d_state(state, m, 3);
+
+	#pragma unroll 8
+	for(i=0; i < 8; i++){
+		state[i] += i_state[i];
+		state_i[i] = state[i];
+	}
+
+	sha256_mining_transform_single_noatom_1d_state(state, msgSchedule_64B_s[0], 0);
+	sha256_mining_transform_single_noatom_1d_state(state, msgSchedule_64B_s[1], 1);
+	sha256_mining_transform_single_noatom_1d_state(state, msgSchedule_64B_s[2], 2);
+	sha256_mining_transform_single_noatom_1d_state(state, msgSchedule_64B_s[3], 3);
+
+	#pragma unroll 8
+	for(i=0; i < 8; i++){
+		state[i] += state_i[i];
 	}
 }
 
@@ -5757,6 +6016,56 @@ __device__ __inline__ int sha256_blockHash_iterate(WORD * uniquedata, WORD * bas
 	hashBlock_noatom(i_state, state, m);
 	return (COMPARE(state[0],target[0]) & COMPARE(state[1],target[1]) & COMPARE(state[2],target[2]) & COMPARE(state[3],target[3]) & COMPARE(state[4],target[4]) & COMPARE(state[5],target[5]) & COMPARE(state[6],target[6]) & COMPARE(state[7],target[7]));
 }
+
+
+__device__ __inline__ void sha256_merkleHash_64B(WORD hash_data[16], WORD * state){
+	int i;
+	WORD m[16];
+	hashBlock_64B(hash_data, state);
+
+	#pragma unroll 8
+	for(i=0; i<8; i++){
+		m[i] = state[i];
+	}
+	#pragma unroll 8
+	for(i=8; i<16; i++){
+		m[i] = msgSchedule_32B[i];
+	}
+	hashBlock_noatom(i_state, state, m);
+	return;
+}
+
+__device__ __inline__ void sha256_merkleHash_32B(WORD * hash_data, WORD * state){
+	int i;
+	WORD m[16];
+	// Finish the remainder of the first hash
+	#pragma unroll 8
+	for(i = 0; i < 8; i++){
+		m[i] = hash_data[i];
+	}
+	#pragma unroll 8
+	for(i=8; i<16; i++){
+		m[i] = msgSchedule_32B[i];
+	}
+	hashBlock_noatom_init(state, m);
+
+	// Double hash the 32 bit state
+	#pragma unroll 8
+	for(i=0; i<8; i++){
+		m[i] = state[i];
+	}
+	#pragma unroll 8
+	for(i=8; i<16; i++){
+		// USE COPY TO REDUCE REG USAGE, 48 REGS IF NOT USED
+		m[i] = msgSchedule_32B_cpy[i];
+	}
+	hashBlock_noatom_init(state, m);
+
+	return;
+}
+
+
+
 
 template <int blocks>
 __global__ void miningBenchmarkKernel_test(WORD * block_d, WORD * result_d, BYTE * hash_d, int * flag_d, int * total_iterations){
