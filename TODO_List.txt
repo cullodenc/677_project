@@ -4,6 +4,8 @@ The items below are grouped by the type of task, and listed to some degree by th
 FIXME CRITICAL
 Critical issues that have yet to be resolved
 
+  Continue cleanup of unneccessary functions/variables, merge duplicates, etc.
+
   Timing Update Bug(TIMING EVENT QUEUE BLOCKING)
     | Summary:
      -Timing updates blocked by too many operations being added to execute asynchronously
@@ -47,14 +49,6 @@ Bugs that currently exist in the program, arising under certain circumstances
 TODO CUDA
 Code improvements which are neccessary to have a fully functional program
 
---Integrate New Mining Algorithm
-  | PRIORITY: High
-  | STATUS: IN PROGRESS
-    - New functions have been successfully integrated into the mining core[2-7-2019]
-    - Cleanup of old functions still required
-  | Details:
-    - A new benchmark kernel was created to improve the mining speed while maintaining a low memory overhead
-    - This kernel needs to be integrated into the main mining functions
 
 --Optimize Merkle Root calculations
   | PRIORITY: Medium High
@@ -73,17 +67,7 @@ Code improvements which are neccessary to have a fully functional program
     -The ideal scenario would use two high priority memory transfer streams, creating full duplex communication to the GPU
     -NOTE Only two streams would be unwise, as this would lead to inner stream dependencies, stalling the completion of kernels which finish out of order
           A more practical option is to create unique streams for each worker, and then have them wait on events before beginning
-
---Change Device Functions
-  | PRIORITY: Medium High
-  | Details:
-    -Several of the device related functions have variables which are either not used, or are used to both send and receive data
-    -This may not lead to the best performance, and should be updated such that the same memory isn't used to both send and receive
-
---Optimize other hash functions
-  | PRIORITY: Medium
-  | Details:
-    -Add acceleration for the other hash functions used, similar to the improvements added in for the 80 Byte double hash used in the new miner kernel
+    -IDEA For concurrent timing, have the write back trigger from a mining completion event, and queue the event after writing back has finished
 
 --Add profiling visuals for mining
   | PRIORITY: Low
@@ -107,8 +91,12 @@ Code improvements which are neccessary to have a fully functional program
     -These will work best for intermediate status outputs if multiple streams are used, such as to print the mining start log after merkle hashing has completed
 
 --Use merkle root data for workers
-  | PRIORITY: Medium Low
+  | PRIORITY: Medium
   | Dependencies: Optimize Merkle Root, Optimize hash functions
+  | STATUS: IN PROGRESS
+    - The input variable for workers was changed to a buffer variable
+    - Additional functions are needed to handle merkle hashing
+    - Multiple streams would be advisable to prevent blocking on the merkle hash
   | Details:
     -The current algorithm is able to emulate the complexity of a blockchain application, but it lacks the capability to actually process transactions
     -This should be updated such that the workers each read a block of data from their file and calculate the merkle root prior to mining the data
@@ -244,6 +232,8 @@ Changes that should be made to improve the code and eliminate stale content
 
 --Remove obsolete functions, update with replacements
   | PRIORITY: Medium
+  | STATUS: IN PROGRESS
+    - Many obsolete functions have been removed, additional simplification requires conversion of testing functions from bytes to words
   | Details:
     -A fair number of the functions used have at some point been either replaced with an improved version or removed due to obsolete functionality
     -These should be deleted when they are no longer of any use
@@ -326,6 +316,30 @@ IDEA FUTURE IMPROVEMENTS
 /*--------------------------------------------------------------------------------------------------------------------------------*/
 BACKLOG - Completed items, along with the completion date
 /*--------------------------------------------------------------------------------------------------------------------------------*/
+
+--Change Device Functions
+  | PRIORITY: Medium High
+  | STATUS: COMPLETED 2-7-2019
+    - All device functions were updated as part of the new set of mining algorithms
+  | Details:
+    -Several of the device related functions have variables which are either not used, or are used to both send and receive data
+    -This may not lead to the best performance, and should be updated such that the same memory isn't used to both send and receive
+
+--Integrate New Mining Algorithm
+  | PRIORITY: High
+  | STATUS: COMPLETED 2-7-2019
+    - New functions have been successfully integrated into the mining core[2-7-2019]
+    - Functions integrated, and duplicate or deprecated functions removed
+  | Details:
+    - A new benchmark kernel was created to improve the mining speed while maintaining a low memory overhead
+    - This kernel needs to be integrated into the main mining functions
+
+--Optimize other hash functions
+  | PRIORITY: Medium
+  | STATUS: COMPLETED 2-6-2019
+    - Mining functions optimized using the same hashing core as the previous benchmark hash
+  | Details:
+    -Add acceleration for the other hash functions used, similar to the improvements added in for the 80 Byte double hash used in the new miner kernel
 
 
 --Fix Benchmark Kernel
