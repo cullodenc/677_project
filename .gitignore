@@ -9,3 +9,4 @@ backups
 tests
 merkle_improvement
 test_results
+*.pyc

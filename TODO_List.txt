@@ -9,9 +9,6 @@ Features that are currently being worked on, in order of priority (excluding cle
 --Update output parser
   | STATUS: Currently built to accommodate verification, still needs to be updated to include performance data
 
---Create Output Verification
-  | STATUS: Created at a basic level, requires some cleanup and organization before being added
-
 --Timing Update Bug
   | STATUS: Patched for now, requires further fixing in the future to enable more accurate timing
 
@@ -279,23 +276,11 @@ TODO PYTHON
   | PRIORITY: High
   | Status: IN-PROGRESS
   | Details:
-    -The current python parser is ignored from the project files as is limited in functionality and currently not capable of parsing the more recent output formatting
-    -The script should be updated to parse all the neccessary files, and organize the required data in spreadsheets
-
---Create Output Verification
-  | PRIORITY: Medium High
-  | Status: IN-PROGRESS
-  | Details:
-    -Some means of verification already exist to test the algorithm functionality, and numerous tests have been done to ensure result validity
-    -Further verification should be done with a simple python script that iterates over the mining results, and checks for any errors that may have occurred during mining
-    -This is only listed lower than the parser as obtaining performance results is slightly more important at this stage in the development process for determining what needs improvement
-    -TODO The use of merkle hashing increases the need for python verification, as it makes verification of results by manual inspection substantially more difficult
-  | NOTE: Components needed for output verification
-    -Shell script which runs mining algorithm and passes the appropriate parameters to the python script for verification
-    -Basic method to test mining hash (double SHA256) for accuracy
-    -Method to test merkle tree finding accuracy
-    -Method to test accuracy of input merkle hashing
-    -Method to test parent hashing and accuracy
+    -The current python parser is set up to load and verify data from the miner output files
+    -Additional features are needed aside from the verificaion component that has been added
+    -Timing and performance analytics need to be gathered for further analysis
+    -A function is needed to organize the required data in spreadsheets, sets up for further data analysis
+    -More input flags would be nice to avoid accidentally overwriting an expensive test, especially for mining
 
 --Create an analysis script
   | PRIORITY: Medium
@@ -448,6 +433,21 @@ IDEA FUTURE IMPROVEMENTS
 /*--------------------------------------------------------------------------------------------------------------------------------*/
 BACKLOG - Completed items, along with the completion date
 /*--------------------------------------------------------------------------------------------------------------------------------*/
+
+--Create Output Verification
+  | PRIORITY: Medium High
+  | Status: COMPLETED 10-22-2019
+  | Details:
+    -Some means of verification already exist to test the algorithm functionality, and numerous tests have been done to ensure result validity
+    -Further verification should be done with a simple python script that iterates over the mining results, and checks for any errors that may have occurred during mining
+    -This is only listed lower than the parser as obtaining performance results is slightly more important at this stage in the development process for determining what needs improvement
+    -TODO The use of merkle hashing increases the need for python verification, as it makes verification of results by manual inspection substantially more difficult
+  | NOTE: Components needed for output verification
+    -Shell script which runs mining algorithm and passes the appropriate parameters to the python script for verification
+    -Basic method to test mining hash (double SHA256) for accuracy
+    -Method to test merkle tree finding accuracy
+    -Method to test accuracy of input merkle hashing
+    -Method to test parent hashing and accuracy
 
 --Use merkle root data for workers
   | PRIORITY: Medium
