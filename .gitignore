@@ -1,4 +1,3 @@
-*.py
 inputs/*
 outputs/*
 !**.gitkeep
@@ -8,3 +7,5 @@ src/openmp
 notes
 backups
 tests
+merkle_improvement
+test_results

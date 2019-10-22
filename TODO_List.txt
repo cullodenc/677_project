@@ -1,7 +1,55 @@
 This TODO list will be updated periodically as new features are added, and new ideas for improvements are created
 The items below are grouped by the type of task, and listed to some degree by their priority, along with relavent details
 
+*********************************************************************************
+TODO IN-PROGRESS
+Features that are currently being worked on, in order of priority (excluding cleanup tasks)
+*********************************************************************************
+
+--Update output parser
+  | STATUS: Currently built to accommodate verification, still needs to be updated to include performance data
+
+--Create Output Verification
+  | STATUS: Created at a basic level, requires some cleanup and organization before being added
+
+--Timing Update Bug
+  | STATUS: Patched for now, requires further fixing in the future to enable more accurate timing
+
+
+*********************************************************************************
+TODO WORK QUEUE
+Features to be developed soon
+*********************************************************************************
+
+--Add device attribute checking
+  | STATUS: Calculations of design dimensions in terms of device hardware limitations allows for minimum device requirements to be determined
+  | DETAILS:
+            - Precomputation hardware check to alert user to unmet system requirements at a minimum
+            - FUTURE: Precompilation check to accommodate different hardware capabilities
+
+--Add Parameter Build Options
+  | STATUS: Requires integration with attribute checking to ensure user defined parameters do not exceed device limitations
+  | DETAILS:
+      -Compile time parameters can allow for multiple architectures to be compared without the need to modify source code
+      -Some parameters could potentially be set at runtime, depending on the level of integration in device functions for each variable
+
+--Fix Input EOF Handling
+  | STATUS: Pseudo implemented, but does not work as intended. Requires a more stable solution for final product
+
+--Create Escape Routes (Error Handling)
+  | STATUS: Limited to only a few mining error conditions for now, needs to be more broadly applied to the entire program
+
+--Add profiling visuals for mining
+  | STATUS: Basic profiling added, still requires a bit of organization and cleanup
+
+--Optimize Merkle Root calculations
+  | STATUS: - Attempted with limited success, postponed for now due to complexity and low impact on performance
+
+
+
+*********************************************************************************
 FIXME CRITICAL
+*********************************************************************************
 Critical issues that have yet to be resolved
 
   Continue cleanup of unneccessary functions/variables, merge duplicates, etc.
@@ -15,8 +63,10 @@ Critical issues that have yet to be resolved
       -Additional intermediate stages could reduce items added to the queue at one time
 
 
+*********************************************************************************
 BUG
 Bugs that currently exist in the program, arising under certain circumstances
+*********************************************************************************
 
 --Timing Update Bug (QUEUE BLOCKING)
   | DATE FOUND: 1-12-2019
@@ -42,23 +92,73 @@ Bugs that currently exist in the program, arising under certain circumstances
       -Result: Failed, problem persists, and the timing stream simply queues the timing updates without successful completion
     --Removing event record after the kernel call from previous streams
       -SUCCESS! - But this prevents accurate timing statistics from being taken, further optimizations required to eliminate this issue completely
+    --TODO: The problem seems to only arise when the number of timed CUDA streams is greater than the number of available CPU cores.
+      -Detect the number of available CPU cores and store the value
+      -If the number of workers requested is less than the available cores, run with accurate timing methods (CUDA events)
+      -If the number of workers requested exceeds the number of available CPU cores, use different timing methods
+          -For low difficulty with a minimal probability of stalling, continue using accurate timing
+          -For high difficulty with a more significant potential to stall out, use safe timing on the CPU side.
+              -Potentially add an escape mechanism, such that if a stall is encountered, halt the GPU process to allow for timing update.
+      -HACK As of 9/11/2019, the bug has been disabled by recording the stop time in the core loop instead of by adding an event to trigger in each worker stream
 
 
 
 
+*********************************************************************************
 TODO CUDA
 Code improvements which are neccessary to have a fully functional program
+*********************************************************************************
 
 
 --Optimize Merkle Root calculations
   | PRIORITY: Medium High
+  | STATUS: POSTPONED
+    -Attempted with limited success, postponed for now due to complexity and low impact on performance
   | Details:
     -The merkle root operation is currently quite bulky on shared memory, and limited in its potential for performance and scaling
     -Ideally, this algorithm would be adjusted to use built in shuffle functions to speed up the coalescing of data into the final thread
     -Storing the data in texture memory could also help to improve the performance for bigger transaction sets
+    -TODO Add an extra merkle loop to process datasets larger than the maximum number of available threads
   | SOLUTION NOTES:
     - Use shuffle operations to coalesce hash data into a single thread
     - Use the new mining operation for hashing [DONE 2-7-2019]
+
+--Add device attribute checking
+  | Priority: Medium High
+  | Details:
+    -The current setup is designed to work for a specific multiprocessor design
+    -If a different device is used which doesn't have enough resources, the program should identify this issue and warn the user
+    -TODO:
+      -Add function to check that the device meets the minimum requirements to run the program
+      -Add compile time options to modify the design parameters such as the multiprocessors available or memory limits, etc
+      -Create a precompilation program which detects gpu properties and adds the neccessary changes to the compile options without user intervention
+
+--Add Parameter Build Options
+  | Priority: Medium High
+  | Details:
+    -Testing and comparison of different build options (such as blocks allocated or threads per block) is currently timing consuming, as these options are hard coded as defined variables
+    -A more versatile testing method would be needed to compare various build options side by side, without the need for compilation and source code modification in between
+  | Solution:
+    -Add compile time options for modifying the architecture, such that multiple different designs can be compiled at once for testing
+
+--Create Escape Routes
+  | PRIORITY: Medium High
+  | Details:
+    - NOTE: SEE "Better Error Handling" in MISC
+    -In the case of an error during execution, the program needs to properly handle the error and respond accordingly.
+    -All faults should also be logged in the error.out file
+    -For critical faults (ex. files won't open, cuda device not detected, cuda function failed):
+      -Detect the nature of the error, log, and proceed to shutdown the program (stop miners, free memory, close files, etc)
+    -For non-critical faults (ex. parent buffer is full & program stalled, worker input EOF, etc):
+      -Log and handle accordingly
+      -TODO Ensure that input EOF handling is working properly, such that the worker is marked as done and the miner exits early if all input files are finished.
+
+--Improve Program Input Options
+  | Priority: Medium High
+  | Details:
+    - The current input options are sufficient for development up to this point, but may require updates in the future
+    - Ex. Input options for attributes such as the input and output files would be helpful for controlling testing
+
 
 --Create Designated Copy Streams
   | PRIORITY: Medium High
@@ -68,16 +168,18 @@ Code improvements which are neccessary to have a fully functional program
     -NOTE Only two streams would be unwise, as this would lead to inner stream dependencies, stalling the completion of kernels which finish out of order
           A more practical option is to create unique streams for each worker, and then have them wait on events before beginning
     -IDEA For concurrent timing, have the write back trigger from a mining completion event, and queue the event after writing back has finished
+    -This fix may be more complicated than neccessary for fixing the timing bug, and has a higher probability of causing further bugs which would be more difficult to track down
 
 --Add profiling visuals for mining
   | PRIORITY: Low
-  | STATUS: IN-PROGRESS
+  | STATUS: UPDATED 1-18-2019
     -Basic detailed profiling added
   | Details:
     -Similar to the benchmark and testing functions, add profiling support to the main miner which shows the stream names/activity, and better displays the blocks mined and difficulty scaling
     -At a basic level, this would simply show the activity, while a more elegant display would use color scaling to better depict the changes in the miner over time
     -TODO Add more informative color schemes and labels for blocks and difficulty scaling
           Re-organize profiling calls into functions to clean up the main host process code
+    -TODO Consolidate profiling functions to reduce the clutter in core mining functions
 
 --Use Stream Callbacks
   | PRIORITY: Low
@@ -90,25 +192,19 @@ Code improvements which are neccessary to have a fully functional program
     -NOTE CUDA functions can't be called from callbacks, so these would be best used to initiate other functions such as file I/O instead of timing
     -These will work best for intermediate status outputs if multiple streams are used, such as to print the mining start log after merkle hashing has completed
 
---Use merkle root data for workers
-  | PRIORITY: Medium
-  | Dependencies: Optimize Merkle Root, Optimize hash functions
-  | STATUS: IN PROGRESS
-    - The input variable for workers was changed to a buffer variable
-    - Additional functions are needed to handle merkle hashing
-    - Multiple streams would be advisable to prevent blocking on the merkle hash
-  | Details:
-    -The current algorithm is able to emulate the complexity of a blockchain application, but it lacks the capability to actually process transactions
-    -This should be updated such that the workers each read a block of data from their file and calculate the merkle root prior to mining the data
-    -Using this method may require later optimizations so that the host doesn't get blocked on reading from the input files
-    -This method will also utilize a greater portion of the available memory copy bandwidth, which is currently drastically underutilized
 
---Add Input File Details header
+--Add File Details header
   | PRIORITY: Medium
   | Details:
     -The input files currently just use a very large number of inputs to prevent ever becoming empty
     -This may change if workers merkle hash the data in the input files
     -A header in each input file with details such as file length would enable the program to preemptively discover if a longer input file is needed
+  | UPDATE:
+    -Most of the output files currently don't provide any additional information aside from the result data
+    -Including output file headers could assist in any post-processing activities
+    -For input files, a total file size could be used to calculate if a larger file needs to be generated
+    -For output files, details such as the starting difficulty (hex) and merkle tree sizes can help reduce user intervention needed for post-processing scripts
+
 
 --Input File EOF Handling
   | PRIORITY: Medium High
@@ -116,9 +212,17 @@ Code improvements which are neccessary to have a fully functional program
     -There is currently pseudo input file error handling in the program, but it does not always perform as needed
     -The input files currently just use a very large number of inputs to prevent ever becoming empty, so EOF handling is currently not an issue
     -When there is an EOF risk, the file reader should be updated to properly handle EOF, and stop a worker if an EOF occurs
+  | UPDATE (From further investigation and duplicate issue)
+    -The program currently does not properly handle the early termination of an input file for workers
+    -Instead, it appears that the program continues running after EOF is reached, using all zero values as the inputs
+    -For this implementation, it may be best to simply start over from the beginning of the file when this condition is reached.
+    -For a functional implementation, it would be best for the program to either halt, or more likely wait for additional inputs from the distributed network (which is out of this project scope)
+    -This is not a critical component for this phase of development, as the program still continues to operate after EOF is reached
 
 
+*********************************************************************************
 TODO Project Management
+*********************************************************************************
 
 --Add makefile building
   | PRIORITY: High
@@ -167,20 +271,31 @@ TODO Project Management
     -This would be more of a luxary feature, as a simple script could be used to implement default customizations to speed up builds during development
 
 
+*********************************************************************************
 TODO PYTHON
+*********************************************************************************
 
 --Update output parser
   | PRIORITY: High
+  | Status: IN-PROGRESS
   | Details:
     -The current python parser is ignored from the project files as is limited in functionality and currently not capable of parsing the more recent output formatting
     -The script should be updated to parse all the neccessary files, and organize the required data in spreadsheets
 
 --Create Output Verification
   | PRIORITY: Medium High
+  | Status: IN-PROGRESS
   | Details:
     -Some means of verification already exist to test the algorithm functionality, and numerous tests have been done to ensure result validity
     -Further verification should be done with a simple python script that iterates over the mining results, and checks for any errors that may have occurred during mining
     -This is only listed lower than the parser as obtaining performance results is slightly more important at this stage in the development process for determining what needs improvement
+    -TODO The use of merkle hashing increases the need for python verification, as it makes verification of results by manual inspection substantially more difficult
+  | NOTE: Components needed for output verification
+    -Shell script which runs mining algorithm and passes the appropriate parameters to the python script for verification
+    -Basic method to test mining hash (double SHA256) for accuracy
+    -Method to test merkle tree finding accuracy
+    -Method to test accuracy of input merkle hashing
+    -Method to test parent hashing and accuracy
 
 --Create an analysis script
   | PRIORITY: Medium
@@ -190,7 +305,9 @@ TODO PYTHON
     -Some of the goal features may not be possible with the tools that are currently used (such as xlsxwriter) and more research and tools will most likely be needed
 
 
+*********************************************************************************
 TODO MISCELLANEOUS
+*********************************************************************************
 
 
 
@@ -227,12 +344,14 @@ TODO MISCELLANEOUS
     -This would also take a lot of effort, and is highly error prone. Thus this task is best reserved for a later point
 
 
+*********************************************************************************
 FIXME CLEANUP
 Changes that should be made to improve the code and eliminate stale content
+*********************************************************************************
 
 --Remove obsolete functions, update with replacements
   | PRIORITY: Medium
-  | STATUS: IN PROGRESS
+  | STATUS: IN-PROGRESS
     - Many obsolete functions have been removed, additional simplification requires conversion of testing functions from bytes to words
   | Details:
     -A fair number of the functions used have at some point been either replaced with an improved version or removed due to obsolete functionality
@@ -248,13 +367,26 @@ Changes that should be made to improve the code and eliminate stale content
     -Examples include variable declarations midway through a function, variables which no longer serve a purpose in a specific context, or variables contain duplicate data
     -These should be fixed when encountered as long as the risk of introducing bugs is low
 
+--Profiling cleanup
+  | PRIORITY: Low Medium
+  | Details:
+    -Although the profiling parameters are useful for visualizing the mining process, they distract from the core code for the project
+    -Various methods should be used to consolidate and clean up profiling code to make core functions more legible
+    -POSSIBLE SOLUTIONS:
+      -Iteration: Some of the nested profiling calls could rely on a struct to help coordinate color and position sequences
+      -Consolidation: Repeated blocks of profiling activity could be grouped together in separately declared functions
+      -Relocation: Many of the profiler functions take up space in the main function, and could be moved within other functions
+      -Wrapping: In some instances, a profiling wrapper could be used to attach a profiling domain to a miner or block, enabling it to end accordingly without needing to be called explicitly
+
 --Eliminate old files
   | PRIORITY: Low
   | Details:
     -The original source files used for this project were originally kept as backup references, but are unneccessary at this point, and should be deleted (or at least moved out of the active repo)
 
 
+*********************************************************************************
 IDEA FUTURE IMPROVEMENTS
+*********************************************************************************
 
 --Implement CPU Multithreading
   | PRIORITY: Medium (depending)
@@ -316,6 +448,19 @@ IDEA FUTURE IMPROVEMENTS
 /*--------------------------------------------------------------------------------------------------------------------------------*/
 BACKLOG - Completed items, along with the completion date
 /*--------------------------------------------------------------------------------------------------------------------------------*/
+
+--Use merkle root data for workers
+  | PRIORITY: Medium
+  | Dependencies: Optimize Merkle Root, Optimize hash functions
+  | STATUS: COMPLETED 9-18-2019
+    - The input variable for workers was changed to a buffer variable
+    - Additional functions were added to handle merkle hashing
+    -Merkle hashing was not fully optimized, primarily due to the complexity of the operation, which would yield limited performance improvements
+  | Details:
+    -The current algorithm is able to emulate the complexity of a blockchain application, but it lacks the capability to actually process transactions
+    -This should be updated such that the workers each read a block of data from their file and calculate the merkle root prior to mining the data
+    -Using this method may require later optimizations so that the host doesn't get blocked on reading from the input files
+    -This method will also utilize a greater portion of the available memory copy bandwidth, which is currently drastically underutilized
 
 --Change Device Functions
   | PRIORITY: Medium High
