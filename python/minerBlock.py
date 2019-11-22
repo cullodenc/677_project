@@ -29,6 +29,9 @@ class MinerBlock:
         self.time = time
         return;
 
+    def getTime(self):					        # GET BLOCK COMPUTE TIME
+        return self.time;
+
     def checkHash(self):						# CHECK THAT CORRECT HASH IS COMPUTED FROM MINING
         if(self.hash == str(doubleHash(self.header))):
             #print "HASH SUCCESS"

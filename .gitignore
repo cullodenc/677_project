@@ -1,5 +1,6 @@
 inputs/*
 outputs/*
+bin/*
 !**.gitkeep
 cuda_miner
 !cuda_miner.cu

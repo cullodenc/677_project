@@ -92,6 +92,7 @@ def processMiner(total_workers, multilevel, silent, wTreeSize, pTreeSize):
 		minerThreads.append(WorkerThread(i, total_workers, multilevel, wTreeSize))
 		minerThreads[i-1].load()
 		minerThreads[i-1].verify()
+		minerThreads[i-1].analysis()
 		if(silent!=1):print "--------------------------------------------------------------------------------------\n"
 		total_errors+= minerThreads[i-1].errors
 		# LOAD WORKER

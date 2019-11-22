@@ -15,6 +15,7 @@ class MinerThread:
         self.total_workers = total_workers
         self.tree_size = tree_size
         self.errors = 0
+        self.time = 0
         self.blockchain = []
         self.label = ""
 
@@ -48,6 +49,13 @@ class MinerThread:
     	for block in self.blockchain:
     		self.errors += block.test()
         print str(self.label)+" CHAIN LENGTH: "+ str(len(self.blockchain))
+    	#print "TOTAL ERRORS: " + str(self.errors)
+        return;
+
+    def analysis(self):
+    	for block in self.blockchain:
+    		self.time += float(block.getTime())
+        print str(self.label)+" MINING TIME: "+ str(self.time) + " ms"
     	#print "TOTAL ERRORS: " + str(self.errors)
         return;
 

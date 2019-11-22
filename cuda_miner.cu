@@ -676,7 +676,11 @@ int TEST_COUNT = 0;
 
 
 // USER DEFINED NUMBER OF THREADS
-#define NUM_THREADS 1024
+#ifdef CUSTOM_THREADS
+	#define NUM_THREADS CUSTOM_THREADS
+#else
+	#define NUM_THREADS 1024
+#endif
 
 // DEVICE LIMITATIONS
 #define SM_THREAD_LIMIT_REGS REG_PER_SM/MINING_REG_PER_THREAD   // 2048
@@ -768,6 +772,7 @@ __host__ void testMiningHash(WORKLOAD * t_load, BYTE * test_str, BYTE * correct_
 __host__ void testDoubleHash(WORKLOAD * t_load, BYTE * test_str, BYTE * correct_str, int test_size, char ** logStr);
 __host__ void testMerkleHash(WORKLOAD * t_load, BYTE * test_str, BYTE * correct_str, int test_size, char ** logStr);
 __host__ void miningBenchmarkTest(int num_workers);
+__host__ void miningBenchmarkTest_full(int num_workers);
 __host__ void colorTest(int num_colors, int num_palettes);
 
 // TODO ADD TESTING CORES HERE
@@ -869,6 +874,7 @@ __host__ int readNextHash(FILE * inFile, WORD * hash_w);
 
 /*--------------------------------------------------------------------------OUTPUT FILE FUNCTIONS--------------------------------------------------------------------------*/
 __host__ int initializeOutfile(char * outFile, char * out_dir_name, int worker_id);
+__host__ int initializeBenchmarkOutfile(char * outFile, char * out_dir_name, int worker_id);
 __host__ int initializeParentOutputs(char * bfilename, char * hfilename);
 __host__ void printDifficulty(char* diff_file, int worker_num, double difficulty, float time, int num_blocks);
 __host__ void printErrorTime(char* err_file, char *err_msg, float err_time);
@@ -887,7 +893,7 @@ __host__ void printOutputFile(char * outFileName, WORD * block_h, WORD * hash_f,
 /***************************************************************************************************************************************************************************/
 
 /*------------------------------------------------------------------------------TEST KERNELS-------------------------------------------------------------------------------*/
-template <int blocks>
+template <int blocks, int id>
 __global__ void miningBenchmarkKernel(WORD * block_d, WORD * result_d, BYTE * hash_d, int * flag_d, int * total_iterations);
 template <int sel>
 __global__ void hashTestDoubleKernel(WORD * test_block, WORD * result_block);
@@ -948,32 +954,57 @@ void CUDART_CB myHostNodeCallback(void *load);
 /************************************************************************END FUNCTION DECLARATIONS**************************************************************************/
 /***************************************************************************************************************************************************************************/
 
-// TEMPLATE FUNCTION CALLS
-// NEW MINING BENCHMARK TEST
-#define LAUNCH_BENCHMARK_TEST(w_blocks, stream, block, result, hash, flag, iterations){ 																																\
+// TEMPLATED FUNCTION CALLS
+// NEW BENCHMARK LAUNCHER WHICH USES BROADER ID BASED TEMPLATING
+// USED TO SIMULATE A FULL WORKLOAD DURING BENCHMARKING TO PREVENT INFLATED PERFORMANCE FOR LOW WORKLOADS PER SM
+// FOR ADDITIONAL KERNELS, BEST USED WITH HIGH DIFFICULTY TO ENSURE CONTINUOUS OPERATION THROUGHOUT THE BENCHMARK, REQUIRES MANUAL EXIT AT THE END (BY CHANGING THE WORKER FLAG)
+#define LAUNCH_BENCHMARK_TEST(w_blocks, id, stream, block, result, hash, flag, iterations){ 																														\
 	if(MULTILEVEL == 0){																																																																	\
 		switch (w_blocks) {																																																																	\
-			case 1:	miningBenchmarkKernel<AVAILABLE_BLOCKS><<<AVAILABLE_BLOCKS, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;			\
-			case 2:	miningBenchmarkKernel<AVAILABLE_BLOCKS/2><<<AVAILABLE_BLOCKS/2, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;	\
-			case 4:	miningBenchmarkKernel<AVAILABLE_BLOCKS/4><<<AVAILABLE_BLOCKS/4, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;	\
-			case 8:	miningBenchmarkKernel<AVAILABLE_BLOCKS/8><<<AVAILABLE_BLOCKS/8, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;	\
-			case 16:miningBenchmarkKernel<AVAILABLE_BLOCKS/16><<<AVAILABLE_BLOCKS/16, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;\
+			case 1: START_BENCHMARK(AVAILABLE_BLOCKS, id, stream, block, result, hash, flag, iterations);	break;																							\
+			case 2:	START_BENCHMARK((AVAILABLE_BLOCKS/2), id, stream, block, result, hash, flag, iterations);	break;																					\
+			case 4:	START_BENCHMARK((AVAILABLE_BLOCKS/4), id, stream, block, result, hash, flag, iterations);	break;																					\
+			case 8:	START_BENCHMARK((AVAILABLE_BLOCKS/8), id, stream, block, result, hash, flag, iterations);	break;																					\
+			case 16:START_BENCHMARK((AVAILABLE_BLOCKS/16), id, stream, block, result, hash, flag, iterations);	break;																				\
 			default:																																																																					\
 				printf("ERROR LAUNCHING MINER: MINING WITH %i BLOCKS IS CURRENTLY NOT SUPPORTED\n SUPPORTED VALUES ARE [1, 2, 4, 8, 16]\n", w_blocks);					\
 				break;																																																																					\
 		} 																																																																									\
 	} else {																																																																							\
 		switch (w_blocks) {																																																																	\
-			case 1:	miningBenchmarkKernel<MAX_BLOCKS><<<MAX_BLOCKS, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;									\
-			case 2:	miningBenchmarkKernel<MAX_BLOCKS/2><<<MAX_BLOCKS/2, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;							\
-			case 4:	miningBenchmarkKernel<MAX_BLOCKS/4><<<MAX_BLOCKS/4, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;							\
-			case 8:	miningBenchmarkKernel<MAX_BLOCKS/8><<<MAX_BLOCKS/8, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;							\
-			case 16:miningBenchmarkKernel<MAX_BLOCKS/16><<<MAX_BLOCKS/16, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;						\
+			case 1:	START_BENCHMARK(MAX_BLOCKS, id, stream, block, result, hash, flag, iterations);	break;																										\
+			case 2:	START_BENCHMARK((MAX_BLOCKS/2), id, stream, block, result, hash, flag, iterations);	break;																								\
+			case 4:	START_BENCHMARK((MAX_BLOCKS/4), id, stream, block, result, hash, flag, iterations);	break;																								\
+			case 8:	START_BENCHMARK((MAX_BLOCKS/8), id, stream, block, result, hash, flag, iterations);	break;																								\
+			case 16:START_BENCHMARK((MAX_BLOCKS/16), id, stream, block, result, hash, flag, iterations);	break;																							\
 			default:																																																																					\
 				printf("ERROR LAUNCHING MINER: MINING WITH %i BLOCKS IS CURRENTLY NOT SUPPORTED\n SUPPORTED VALUES ARE [1, 2, 4, 8, 16]\n", w_blocks);					\
 				break;																																																																					\
 		} 																																																																									\
 	}																																																																											\
+}
+
+
+#define START_BENCHMARK(w_blocks, id, stream, block, result, hash, flag, iterations){																																		\
+	switch (id) {																																																																					\
+		case 0:	 miningBenchmarkKernel<w_blocks, 0><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 1:	 miningBenchmarkKernel<w_blocks, 1><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 2:	 miningBenchmarkKernel<w_blocks, 2><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 3:	 miningBenchmarkKernel<w_blocks, 3><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 4:	 miningBenchmarkKernel<w_blocks, 4><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 5:	 miningBenchmarkKernel<w_blocks, 5><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 6:	 miningBenchmarkKernel<w_blocks, 6><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 7:	 miningBenchmarkKernel<w_blocks, 7><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 8:	 miningBenchmarkKernel<w_blocks, 8><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 9:	 miningBenchmarkKernel<w_blocks, 9><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;										\
+		case 10: miningBenchmarkKernel<w_blocks, 10><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;									\
+		case 11: miningBenchmarkKernel<w_blocks, 11><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;									\
+		case 12: miningBenchmarkKernel<w_blocks, 12><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;									\
+		case 13: miningBenchmarkKernel<w_blocks, 13><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;									\
+		case 14: miningBenchmarkKernel<w_blocks, 14><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;									\
+		case 15: miningBenchmarkKernel<w_blocks, 15><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;									\
+		case 16: miningBenchmarkKernel<w_blocks, 16><<<w_blocks, NUM_THREADS, 0, stream>>>(block, result, hash, flag, iterations);	break;									\
+	} 																																																																										\
 }
 
 // TEMPLATE FOR MINER KERNEL
@@ -1235,7 +1266,10 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
     // RUN BENCHMARK TEST FOR DEVICE PERFORMANCE
     if(bench_flag == 1){
       printf("BENCHMARK TESTING SELECTED!!!!!\n");
+/* CHANGED FOR ALTERNATE BENCHMARK TESTING
 			miningBenchmarkTest(NUM_WORKERS);
+//*/
+			miningBenchmarkTest_full(NUM_WORKERS);
     }
     // START MINING IF DRY RUN IS NOT SELECTED
     if(dry_run == 0){
@@ -1983,6 +2017,12 @@ __host__ void hostDeviceQuery(void){
   cudaDeviceGetAttribute(&value, (cudaDeviceAttr)99 ,device);
   printf("  Device supports host memory registration via cudaHostRegister: %i\n", value);
 
+	cudaDeviceGetAttribute(&value, (cudaDeviceAttr)15 ,device);
+	printf("\n  GPU OVERLAP: Device can possibly copy memory and execute a kernel concurrently: %i\n", value);
+
+	cudaDeviceGetAttribute(&value, (cudaDeviceAttr)17 ,device);
+	printf("\n  KernelExecTimeout: Specifies whether there is a run time limit on kernels: %i\n", value);
+
   return;
 }
 
@@ -2220,7 +2260,6 @@ __host__ void testMiningHash(WORKLOAD * t_load, BYTE * test_str, BYTE * correct_
 
 	t_load->block_h[18] = diff_pow;
 	getDifficulty(t_load);
-	cudaMemcpyToSymbolAsync(target_const, t_load->target, HASH_SIZE, 0, cudaMemcpyHostToDevice, t_load->stream);
 
 	encodeWord(test_str, t_load->block_h, 160);
 	cudaMemcpyAsync(t_load->block_d, t_load->block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, t_load->stream);
@@ -2348,7 +2387,6 @@ __host__ void miningBenchmarkTest(int num_workers){
 	// SET TARGET DIFFICULTY
 	t_load->block_h[18] = 0x1d00ffff;
 	getDifficulty(t_load);
-	cudaMemcpyToSymbolAsync(target_const, t_load->target, HASH_SIZE, 0, cudaMemcpyHostToDevice, t_load->stream);
 
 	srand(time(0));
 	for(int j = 0; j < BENCHMARK_LOOPS; j++){
@@ -2367,7 +2405,7 @@ __host__ void miningBenchmarkTest(int num_workers){
 		cudaMemsetAsync(t_load->flag, 0, sizeof(int), t_load->stream);
 		cudaMemsetAsync(iterations_d, 0, sizeof(int), t_load->stream);
 
-		LAUNCH_BENCHMARK_TEST(NUM_WORKERS, t_load->stream, t_load->block_d, t_load->hash_d, t_load->hash_byte, t_load->flag, iterations_d);
+		LAUNCH_BENCHMARK_TEST(NUM_WORKERS, t_load->id, t_load->stream, t_load->block_d, t_load->hash_d, t_load->hash_byte, t_load->flag, iterations_d);
 		// UPDATE TIMING VARIABLE
 		while(cudaStreamQuery(t_load->stream) != 0){
 			updateTime(&tStream, time_h, handle);
@@ -2415,6 +2453,246 @@ __host__ void miningBenchmarkTest(int num_workers){
 	freeWorkload(t_load);
   return;
 }
+
+
+// IMPROVED MINING KERNEL BENCHMARK TEST FUNCTION
+// THIS TEST USES MULTIPLE COMPLEMENTARY KERNELS TO SIMULATE A REALISTIC WORKLOAD
+// ADDITIONAL OUTPUTS USED FOR PYTHON GRAPHING SCRIPT
+__host__ void miningBenchmarkTest_full(int num_workers){
+  // INITIALIZE BENCHMARK VARIABLES
+	WORKLOAD * t_load;
+	t_load = (WORKLOAD*)malloc(sizeof(WORKLOAD));
+	allocWorkload(0, t_load, 1);
+
+	char out_location[30];
+
+	if(MULTILEVEL == 1){
+	  sprintf(out_location, "outputs/benchtest/results_%i_pchains", num_workers);
+	}else{
+	  sprintf(out_location, "outputs/benchtest/results_%i_chains", num_workers);
+	}
+
+	initializeBenchmarkOutfile(t_load->outFile, out_location, num_workers);
+
+	// COMPLEMENT WORKLOAD
+	WORKLOAD * c_load;
+	WORKLOAD * c_workload;
+	c_workload = (WORKLOAD*)malloc(sizeof(WORKLOAD)*(num_workers-1));
+	for(int i = 0; i < (num_workers-1); i++){
+		// ALLOCATE WORKLOAD INNER VARIABLES
+		allocWorkload(i+1, &c_workload[i], WORKER_BUFFER_SIZE);
+		POP_DOMAIN(w_handle[i]); // END WORKER ALLOCATION RANGE
+	}
+
+	char logResult[1000];
+	float worker_time, block_time, thread_time;
+	//float complement_time;
+
+	// INITIALIZE BENCHMARK PROFILING DOMAIN
+	char stream_name[50];
+	sprintf(stream_name, "BENCHMARK STREAM");
+	NAME_STREAM(t_load->stream, stream_name);
+	#ifdef USE_NVTX
+		DOMAIN_HANDLE handle;
+	#else
+		int handle = 0;
+	#endif
+	DOMAIN_CREATE(handle, "BENCHMARK TEST");
+	PUSH_DOMAIN(handle, "BENCHMARK TEST", -2, 0, 0);
+
+	// INITIALIZE CONSTANTS FOR USE IN THE MINING KERNEL
+	int * iterations_h;
+	int total_iterations = 0;
+	int * iterations_d;
+	iterations_h = (int*)malloc(sizeof(int));
+	cudaMalloc((void **) &iterations_d, sizeof(int));
+
+	// INITIALIZE CONSTANTS FOR USE IN THE COMPLEMENT MINING KERNEL
+	int * c_iterations_h;
+	int c_total_iterations = 0;
+	int * c_iterations_d;
+	int * c_iterations_ptr;
+
+	c_iterations_h = (int*)malloc(sizeof(int));
+	cudaMalloc((void **) &c_iterations_d, sizeof(int)*(num_workers-1));
+
+	WORD * time_h;
+	cudaStream_t tStream;
+	initTime(&tStream, &time_h);
+
+	// SET TARGET DIFFICULTY
+	t_load->block_h[18] = 0x1d00ffff;
+	getDifficulty(t_load);
+
+	printf("STARTING WORKLOAD SIMULATION\n");
+
+	for(int i = 0; i < (num_workers-1); i++){
+		c_load = &c_workload[i];
+		c_iterations_ptr = &c_iterations_d[i];
+		// SET HIGH COMPLEMENT TARGET DIFFICULTY
+		c_load->block_h[18] = 0x1a00ffff;
+		getDifficulty(c_load);
+		cudaEventRecord(c_load->t_start, c_load->stream);
+
+		srand(time(0));
+		// SET COMPLEMENT WORKLOAD
+		for(int i = 0; i < 17; i++){
+				c_load->block_h[i] = (((rand() % 255) & 0xFF) << 24) | (((rand() % 255) & 0xFF) << 16) | (((rand() % 255) & 0xFF) << 8) | ((rand() % 255) & 0xFF);
+		}
+		c_load->block_h[0] = 0x01000000;
+		c_load->block_h[17] = getTime();
+		c_load->block_h[18] = 0x1a00ffff;
+		c_load->block_h[19] = 0x00000000;
+
+		// CHANGED FIXME SET FOR C LOAD
+		cudaMemcpyAsync(c_load->block_d, c_load->block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, c_load->stream);
+		calculateFirstState(c_load->basestate_h, c_load->block_h);
+		cudaMemcpyToSymbolAsync(block_const, c_load->basestate_h, HASH_SIZE, HASH_SIZE*c_load->id, cudaMemcpyHostToDevice, c_load->stream);
+		cudaMemsetAsync(c_load->flag, 0, sizeof(int), c_load->stream);
+		cudaMemsetAsync(c_iterations_d, 0, sizeof(int), c_load->stream);
+
+		LAUNCH_BENCHMARK_TEST(NUM_WORKERS, c_load->id, c_load->stream, c_load->block_d, c_load->hash_d, c_load->hash_byte, c_load->flag, c_iterations_ptr);
+	}
+
+	cudaEventRecord(t_load->t_start, t_load->stream);
+	printf("************************\nSTARTING BENCHMARK LOOPS\n************************\n");
+	for(int j = 0; j < BENCHMARK_LOOPS; j++){
+		// CREATE RANDOM TEST BLOCK
+	  for(int i = 0; i < 17; i++){
+				t_load->block_h[i] = (((rand() % 255) & 0xFF) << 24) | (((rand() % 255) & 0xFF) << 16) | (((rand() % 255) & 0xFF) << 8) | ((rand() % 255) & 0xFF);
+	  }
+		t_load->block_h[0] = 0x01000000;
+		t_load->block_h[17] = getTime();
+		t_load->block_h[18] = 0x1d00ffff;
+		t_load->block_h[19] = 0x00000000;
+
+		cudaMemcpyAsync(t_load->block_d, t_load->block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, t_load->stream);
+		calculateFirstState(t_load->basestate_h, t_load->block_h);
+		cudaMemcpyToSymbolAsync(block_const, t_load->basestate_h, HASH_SIZE, 0, cudaMemcpyHostToDevice, t_load->stream);
+		cudaMemsetAsync(t_load->flag, 0, sizeof(int), t_load->stream);
+		cudaMemsetAsync(iterations_d, 0, sizeof(int), t_load->stream);
+
+		LAUNCH_BENCHMARK_TEST(NUM_WORKERS, t_load->id, t_load->stream, t_load->block_d, t_load->hash_d, t_load->hash_byte, t_load->flag, iterations_d);
+		// UPDATE TIMING VARIABLE
+		while(cudaStreamQuery(t_load->stream) != 0){
+			updateTime(&tStream, time_h, handle);
+		}
+
+		cudaMemcpyAsync(iterations_h, iterations_d, sizeof(int), cudaMemcpyDeviceToHost, t_load->stream);
+		cudaMemcpyAsync(t_load->block_h, t_load->block_d, BLOCK_SIZE, cudaMemcpyDeviceToHost, t_load->stream);
+		cudaMemcpyAsync(t_load->hash_h, t_load->hash_d, HASH_SIZE, cudaMemcpyDeviceToHost, t_load->stream);
+		total_iterations += *iterations_h;
+		cudaStreamSynchronize(t_load->stream);
+		printf("\n\nBLOCK SOLUTION found in %d iterations \n", *iterations_h);
+		printWords(t_load->block_h, 20);
+		printf("RESULT: ");
+		printWords(t_load->hash_h, 8);
+	}
+	cudaEventRecord(t_load->t_stop, t_load->stream);
+	printf("Finished Testing, waiting for GPU to finish processing\n");
+
+	for(int i = 0; i < (num_workers-1); i++){
+		c_load = &c_workload[i];
+		cudaMemcpyAsync(c_load->flag, t_load->flag, sizeof(int), cudaMemcpyDeviceToDevice, t_load->stream);
+		cudaEventRecord(c_load->t_stop, c_load->stream);
+	}
+
+	cudaDeviceSynchronize();
+
+	for(int i = 0; i < (num_workers-1); i++){
+		c_iterations_ptr = &c_iterations_d[i];
+		cudaMemcpyAsync(c_iterations_h, c_iterations_ptr, sizeof(int), cudaMemcpyDeviceToHost, c_load->stream);
+		c_total_iterations += *c_iterations_h;
+	}
+
+	cudaDeviceSynchronize();
+	printf("Processing finished, compiling results\n");
+	POP_DOMAIN(handle);
+	freeTime(&tStream, &time_h);
+	cudaEventElapsedTime(&t_load->t_result, t_load->t_start, t_load->t_stop);
+
+	for(int i = 0; i < (num_workers-1); i++){
+		c_load = &c_workload[i];
+		cudaEventElapsedTime(&c_load->t_result, c_load->t_start, c_load->t_stop);
+
+		// CHANGED ADDED 11-21
+		printf("Worker %i Elapsed Time: %f \n", c_load->id, c_load->t_result);
+		//complement_time += c_load->t_result;
+	}
+
+	// These may be useful for future graphs
+	//printf("Complement Iterations: %i \n", c_total_iterations);
+	//long long int all_c_iterations = 0;
+	//all_c_iterations = ((long long int)c_total_iterations)*((long long int)NUM_THREADS);
+	//complement_time = ((all_c_iterations)/(complement_time*1000));
+	//printf("COMPLEMENT HASHRATE: \t %.3f MH/s \n", complement_time);
+
+	printf("TOTAL ITERATIONS PASSED: %i\n", total_iterations);
+	printf("WORKER_BLOCKS: %i\n", WORKER_BLOCKS);
+	printf("NUM THREADS: %i\n\n", NUM_THREADS);
+
+	long long int all_iterations = 0;
+	all_iterations = ((long long int)total_iterations)*((long long int)NUM_THREADS);
+	printf("ALL ITERATIONS: %lld \n", all_iterations);
+
+	worker_time = ((all_iterations)/(t_load->t_result*1000));
+	block_time = worker_time/WORKER_BLOCKS;
+	thread_time = (block_time*1000)/NUM_THREADS;
+
+	sprintf(logResult, "\n****************************MINING BENCHMARK ANALYSIS FOR %i WORKER CHAINS****************************\n\
+	NUM BLOCKS: %i\n\
+	NUM THREADS: %i\n\
+	TOTAL ITERATIONS: %i\n\
+	TOTAL TIME: %f\n\n\
+	WORKER HASHRATE:\t %.3f MH/s\n\
+	BLOCK HASHRATE:\t %.3f MH/s\n\
+	THREAD HASHRATE:\t %.3f KH/s\n\
+	**********************************************************************************************\n\
+	", num_workers, WORKER_BLOCKS, NUM_THREADS, total_iterations, t_load->t_result, worker_time, block_time, thread_time);
+
+	printf("PRINTING TO LOG FILE\n");
+	printLog(logResult);
+	printf("FINISHED PRINTING TO LOG FILE\n");
+
+	// PRINT PRIMARY DATA TO A FILE
+	if(t_load->inFile = fopen(t_load->outFile, "w")){
+		printf("OPENED FILE %s\n", t_load->outFile);
+		fprintf(t_load->inFile, "%s\n", logResult);
+		printf("PRINTED TO FILE %s\n", t_load->outFile);
+		fclose(t_load->inFile);
+		printf("CLOSED FILE %s\n", t_load->outFile);
+
+	}
+	else{
+		printf("WORKER %i OUTPUT FILE: %s NOT FOUND", num_workers, t_load->outFile);
+	}
+
+	printf("FINISHED PRINTING TO OUTPUT FILE ")
+
+	DOMAIN_DESTROY(handle);
+
+	printf("FINISHED DOMAIN DESTROY");
+
+	// CHANGED FREE COMPLEMENT VARIABLES
+
+	free(c_iterations_h);
+	cudaFree(c_iterations_d);
+	for(int i = 0; i < (num_workers-1); i++){
+		// FREE WORKLOAD INNER VARIABLES
+		freeWorkload( &c_workload[i]);
+	}
+	free(c_workload);
+
+	free(iterations_h);
+	cudaFree(iterations_d);
+	freeWorkload(t_load);
+	free(t_load);
+  return;
+}
+
+
+
+
 
 __host__ void colorTest(int num_colors, int num_palettes){
 	START_PROFILE;
@@ -3590,6 +3868,26 @@ __host__ int initializeParentOutputs(char * bfilename, char * hfilename){
   } printDebug((const char*)logOut);
   return writeErr;
 }
+
+// CREATE BENCHMARK OUTPUT FILES FOR EACH WORKER, AND OUTPUT DIRECTORY IF NECCESSARY
+__host__ int initializeBenchmarkOutfile(char * outFile, char * out_dir_name, int worker_id){
+  printDebug((const char*)"BEGIN OUTPUT INITIALIZATION");
+  int readErr = 0; char logOut[100]; FILE * output;
+  mkdir("outputs", ACCESSPERMS);
+	mkdir("outputs/benchtest", ACCESSPERMS);
+  mkdir(out_dir_name, ACCESSPERMS);
+  sprintf(outFile, "%s/benchmark_%i_threads.txt", out_dir_name, NUM_THREADS);
+
+  if(output = fopen(outFile, "w")){
+		fclose(output);
+  }
+  else{
+      sprintf(logOut,"WORKER %i OUTPUT FILE: %s NOT FOUND",worker_id, outFile);
+      readErr = 1;
+  } printDebug((const char*)logOut);
+  return readErr;
+}
+
 // PRINT TOTAL TIMING RESULTS FOR A GIVEN DIFFICULTY (OR BLOCK)
 __host__ void printDifficulty(char* diff_file, int worker_num, double difficulty, float diff_time, int num_blocks){
   float avg_time = diff_time/(float)num_blocks;
@@ -3725,7 +4023,7 @@ ________________________________________________________________________________
 /****************************************************************************HASH TEST FUNCTIONS****************************************************************************/
 
 // MINING BENCHMARK TEST FUNCTION
-template <int blocks>
+template <int blocks, int id>  // CHANGED TEMPLATE TO DIFFERENTIATE TARGET CONSTANTS
 __global__ void miningBenchmarkKernel(WORD * block_d, WORD * result_d, BYTE * hash_d, int * flag_d, int * total_iterations){
 	int success = 0, i = 0, j=0;
 	int write = 0;
@@ -3737,10 +4035,16 @@ __global__ void miningBenchmarkKernel(WORD * block_d, WORD * result_d, BYTE * ha
 	// EACH THREAD HAS ITS OWN VARIABLE FOR TOP 16 BYTES
 	// ALLOCATED ON SHARED MEMORY TO FREE UP REGISTER USAGE FOR HASHING
 
-	__shared__ WORD unique_data[1024][4];
+	__shared__ WORD unique_data[NUM_THREADS][4];
 	WORD * unique_ptr = unique_data[threadIdx.x];
-	WORD * base = &(block_const[0]);
-	WORD * target = &(target_const[0]);
+
+	// ID based addressing for constants
+	WORD * base = &(block_const[id*8]);
+	WORD * target = &(target_const[id*8]);
+
+	// HARDWARE DEBUGGING, ONLY ACTIVE IF DEV_DEBUG >= 3
+	// DOESN'T ADD TO MEMORY USAGE
+	DEVICE_DEBUG(if(threadIdx.x == 0){printf("W [%i| %i]: [SM: %i | WARP: %i]\n", id, blockIdx.x, get_smid(), get_warpid());})
 
 	WORD state_ptr[8];
 
@@ -3765,9 +4069,11 @@ __global__ void miningBenchmarkKernel(WORD * block_d, WORD * result_d, BYTE * ha
 							for(j = 0; j < 8; j++){
 								result_d[j] = state_ptr[j];
 							}
-							DEVICE_PRINT_SOLN("THREAD: [%i,%i] FOUND BLOCK ON ITERATION %i.\n", threadIdx.x, blockIdx.x, i);
-							DEVICE_PRINT_SOLN("STATE %08x%08x%08x%08x", state_ptr[0], state_ptr[1], state_ptr[2], state_ptr[3]);
-							DEVICE_PRINT_SOLN("%08x%08x%08x%08x.\n\n", state_ptr[4], state_ptr[5], state_ptr[6], state_ptr[7]);
+							// CHANGED ADDS TO MEMORY USAGE, BREAKING BENCHMARK TEST
+							// INCREASES BENCHMARK REGISTER USAGE, CAUSING A STALL WHEN THE HIGH DIFFICULTY WORKLOAD SIMULATION IS STARTED
+							//DEVICE_PRINT_SOLN("THREAD: [%i,%i] FOUND BLOCK ON ITERATION %i.\n", threadIdx.x, blockIdx.x, i);
+							//DEVICE_PRINT_SOLN("STATE %08x%08x%08x%08x", state_ptr[0], state_ptr[1], state_ptr[2], state_ptr[3]);
+							//DEVICE_PRINT_SOLN("%08x%08x%08x%08x.\n\n", state_ptr[4], state_ptr[5], state_ptr[6], state_ptr[7]);
 							block_d[16] = unique_ptr[0];
 							block_d[17] = unique_ptr[1];
 							block_d[18] = unique_ptr[2];
@@ -3811,6 +4117,10 @@ __global__ void hashTestMiningKernel(WORD * test_block, WORD * result_block, int
 	for(int i = 0; i < 8; i++){
 		result_block[i] = state[threadIdx.x][i];
 	}
+
+	//TEST HARDWARE LOGGING FUNCTIONS
+	printf("HARDWARE DEBUG: [SM: %i | WARP: %i| LANE: %i]\n", get_smid(), get_warpid(), get_laneid());
+
 	return;
 }
 
@@ -3871,6 +4181,9 @@ __global__ void minerKernel(WORD * block_d, WORD * result_d, BYTE * hash_d, int 
 
 	__shared__ WORD unique_data[NUM_THREADS][4];
 	WORD * unique_ptr = unique_data[threadIdx.x];
+
+	// HARDWARE DEBUGGING
+	DEVICE_DEBUG(if(threadIdx.x == 0){printf("W [%i| %i]: [SM: %i | WARP: %i]\n", id, blockIdx.x, get_smid(), get_warpid());})
 
 	// ADDS ADDITIONAL REGISTERS (8 REGS EACH)
 //	WORD * block_ptr = &(block_const[block_offset]);
@@ -3941,7 +4254,7 @@ __global__ void merkleKernel(WORD * pHash_d, WORD * block_d, int buffer_blocks, 
 
 		if(threadIdx.x < buffer_blocks){
 		 	sha256_merkleHash_32B(&pHash_d[offset], local_out);
-			DEVICE_PRINT_SOLN("INIT THREAD %i HASH: %08x%08x%08x%08x\n", threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
+			//DEVICE_PRINT_SOLN("INIT THREAD %i HASH: %08x%08x%08x%08x\n", threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
 			for(int i = 2; i <= tree_size; i*=2){
 	      if(threadIdx.x % i == 0){
 					mid = i/2;
@@ -3959,7 +4272,7 @@ __global__ void merkleKernel(WORD * pHash_d, WORD * block_d, int buffer_blocks, 
 	          }
 	        }
 					sha256_merkleHash_64B(local_in, local_out);
-					DEVICE_PRINT_SOLN("ROUND %i THREAD %i HASH: %08x%08x%08x%08x\n", i, threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
+					//DEVICE_PRINT_SOLN("ROUND %i THREAD %i HASH: %08x%08x%08x%08x\n", i, threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
 	      }
 	    } //END FOR LOOP
 			if(threadIdx.x == 0){
@@ -3995,7 +4308,7 @@ __global__ void merkleKernel_workflow(WORD * pHash_d, WORD * block_d, WORD * bas
 
 		if(threadIdx.x < buffer_blocks){
 		 	sha256_merkleHash_32B(&pHash_d[offset], local_out);
-			DEVICE_PRINT_SOLN("INIT THREAD %i HASH: %08x%08x%08x%08x\n", threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
+			//DEVICE_PRINT_SOLN("INIT THREAD %i HASH: %08x%08x%08x%08x\n", threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
 			// FIXME Debugging for merkle mechanics
 			//printf("Round 1: Thread %i \t Warp %i \t Lane %i \n", threadIdx.x, get_warpid(), get_laneid());
 			//printf("INIT THREAD %i HASH: %08x%08x%08x%08x\n", threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
@@ -4020,7 +4333,7 @@ __global__ void merkleKernel_workflow(WORD * pHash_d, WORD * block_d, WORD * bas
 	        }
 
 					sha256_merkleHash_64B(local_in, local_out);
-					DEVICE_PRINT_SOLN("ROUND %i THREAD %i HASH: %08x%08x%08x%08x\n", i, threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
+					//DEVICE_PRINT_SOLN("ROUND %i THREAD %i HASH: %08x%08x%08x%08x\n", i, threadIdx.x, local_out[0], local_out[1], local_out[2], local_out[3]);
 					// FIXME Debugging for results per round
 					//printf("Round %i: Thread %i \t Warp %i \t Lane %i \n", i, threadIdx.x, get_warpid(), get_laneid());
 	      }

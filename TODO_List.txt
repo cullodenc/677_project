@@ -18,6 +18,14 @@ TODO WORK QUEUE
 Features to be developed soon
 *********************************************************************************
 
+--Update output parser
+  | STATUS: Load and verification scripts are functional, more features are needed
+  | DETAILS:
+    -The current python parser is set up to load and verify data from the miner output files
+    -Additional features are needed aside from the verificaion component that has been added
+    -Output Parser created for benchmarking with spreadsheet writer and graphing capabilities
+    -Add similar funtionality for the minerPostprocess script, use for throughput to start
+
 --Add device attribute checking
   | STATUS: Calculations of design dimensions in terms of device hardware limitations allows for minimum device requirements to be determined
   | DETAILS:
@@ -132,9 +140,11 @@ Code improvements which are neccessary to have a fully functional program
 
 --Add Parameter Build Options
   | Priority: Medium High
+  | Status: IN-PROGRESS
   | Details:
     -Testing and comparison of different build options (such as blocks allocated or threads per block) is currently timing consuming, as these options are hard coded as defined variables
     -A more versatile testing method would be needed to compare various build options side by side, without the need for compilation and source code modification in between
+    -Custom threads per block value is now available using compile time option CUSTOM_THREADS
   | Solution:
     -Add compile time options for modifying the architecture, such that multiple different designs can be compiled at once for testing
 
@@ -281,6 +291,9 @@ TODO PYTHON
     -Timing and performance analytics need to be gathered for further analysis
     -A function is needed to organize the required data in spreadsheets, sets up for further data analysis
     -More input flags would be nice to avoid accidentally overwriting an expensive test, especially for mining
+  UPDATE:
+    -Output Parser created for benchmarking with spreadsheet writer and graphing capabilities
+    -Next step: Add similar funtionality for the minerPostprocess script, use for throughput to start
 
 --Create an analysis script
   | PRIORITY: Medium
