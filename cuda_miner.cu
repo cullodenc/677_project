@@ -697,18 +697,11 @@ int TEST_COUNT = 0;
 // 16 @1024 threads, 32 @512 threads, 64 @256, 128 @128, 256 @64
 #define MAX_BLOCKS MINING_BLOCKS_PER_SM*(DEVICE_MULTIPROCESSORS-2)
 
-// CHANGED 10-19-2019. Testing different merkle thread counts
-// TODO Worker merkle works with 64 blocks, other values haven't been rigorously tested yet
-#define MERKLE_THREADS 64			// 512 MAXIMUM DUE TO SHARED MEMORY LIMIT (WAS 64 FOR TESTING)
-
-// CHANGED 10-19-2019 For buffer size testing
-#define WORKER_BUFFER_SIZE MERKLE_THREADS
-//#define WORKER_BUFFER_SIZE 64	// SIZE OF WORKER INPUT BUFFER (MUST BE LESS THAN MERKLE THREADS) FIXME UNLESS MERKLE IS MODIFIED TO HAVE EACH THREAD PROCESS SEVERAL HASHES
-
-
-#define PARENT_BLOCK_SIZE 16
-#define DIFFICULTY_LIMIT 32
-
+// USER DEFINED PARAMETER DEFAULTS
+#define MERKLE_THREADS 512			// 512 MAXIMUM DUE TO SHARED MEMORY LIMIT (WAS 64 FOR TESTING)
+int WORKER_BUFFER_SIZE = 32;
+int PARENT_BLOCK_SIZE = 16;
+int DIFFICULTY_LIMIT = 32;
 
 // FIXME SEPARATE VARIABLES BY TYPE
 /***************************************************************************************************************************************************************************/
@@ -748,6 +741,16 @@ int NUM_WORKERS = 1;      // NUMBER OF WORKERS 1 BY DEFAULT
 // NUMBER OF LOOPS IN THE BENCHMARK
 #define BENCHMARK_LOOPS 10
 
+int DIFF_SCALING = 1;
+int DIFFICULTY_BITS = 0;
+
+// Timeout variables
+int TIMEOUT = 0;		// Set to 1 to enable timeout
+int TIME_LIMIT = 0;	// Set to number of seconds till timeout
+
+#define START_POW (0X1D - DIFF_REDUCE)
+#define START_BITS (0x00FFFF - (DIFFICULTY_BITS << 8))
+#define START_DIFF ((START_POW << 24) | START_BITS)
 
 /***************************************************************************************************************************************************************************/
 /****************************************  _______________________________________________________________________________________  ****************************************/
@@ -1195,6 +1198,24 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 						break;
 					}
 			}
+			else if(strcmp(arg_in, "-timeout") == 0){
+					if(i+1 < argc){
+						if(atoi(argv[i+1]) > 0){
+							TIME_LIMIT = atoi(argv[i+1]);
+							TIMEOUT = 1;
+							printf("TIMEOUT ENABLED, SET TO %i SECONDS\n", TIME_LIMIT);
+							i++;
+						} else{
+							printf("%s   fatal:  OPTION '-timeout' EXPECTS A POSITIVE NON-ZERO INTEGER ARGUMENT, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							err_flag = 1;
+							break;
+						}
+					} else{
+						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-timeout'\n\n", argv[0]);
+						err_flag = 1;
+						break;
+					}
+			}
 			else if(strcmp(arg_in, "-diff") == 0){
 					if(i+1 < argc){
 						if(atoi(argv[i+1]) >= -3 && atoi(argv[i+1]) <= 26){
@@ -1208,6 +1229,91 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 						}
 					} else{
 						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-diff'\n\n", argv[0]);
+						err_flag = 1;
+						break;
+					}
+			}
+			else if(strcmp(arg_in, "-dscale") == 0){
+					if(i+1 < argc){
+						if(atoi(argv[i+1]) >= 0){
+							DIFF_SCALING = atoi(argv[i+1]);
+							printf("DIFFICULTY SCALING SET TO %i\n", DIFF_SCALING);
+							i++;
+						} else{
+							printf("%s   fatal:  OPTION '-dscale' EXPECTS AN INTEGER ARGUMENT GREATER THAN ZERO, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							err_flag = 1;
+							break;
+						}
+					} else{
+						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-dscale'\n\n", argv[0]);
+						err_flag = 1;
+						break;
+					}
+			}
+			else if(strcmp(arg_in, "-dlimit") == 0){
+					if(i+1 < argc){
+						if(atoi(argv[i+1]) >= 0){
+							DIFFICULTY_LIMIT = atoi(argv[i+1]);
+							printf("DIFFICULTY LIMIT SET TO %i\n", DIFFICULTY_LIMIT);
+							i++;
+						} else{
+							printf("%s   fatal:  OPTION '-dlimit' EXPECTS AN INTEGER ARGUMENT GREATER THAN ZERO, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							err_flag = 1;
+							break;
+						}
+					} else{
+						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-dlimit'\n\n", argv[0]);
+						err_flag = 1;
+						break;
+					}
+			}
+			else if(strcmp(arg_in, "-dbits") == 0){
+					if(i+1 < argc){
+						if(atoi(argv[i+1]) >= 0 && atoi(argv[i+1]) < 255){
+							DIFFICULTY_BITS = atoi(argv[i+1])+1;
+							printf("DIFFICULTY BITS SET TO %i\n", DIFFICULTY_BITS);
+							i++;
+						} else{
+							printf("%s   fatal:  OPTION '-dbits' EXPECTS AN INTEGER BETWEEN ZERO AND 254, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							err_flag = 1;
+							break;
+						}
+					} else{
+						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-dbits'\n\n", argv[0]);
+						err_flag = 1;
+						break;
+					}
+			}
+			else if(strcmp(arg_in, "-ptree") == 0){
+					if(i+1 < argc){
+						if(atoi(argv[i+1]) >= 1 && atoi(argv[i+1]) <= 512){
+							PARENT_BLOCK_SIZE = atoi(argv[i+1]);
+							printf("PARENT MERKLE TREE SIZE SET TO %i\n", PARENT_BLOCK_SIZE);
+							i++;
+						} else{
+							printf("%s   fatal:  OPTION '-ptree' EXPECTS AN INTEGER ARGUMENT BETWEEN O AND 512, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							err_flag = 1;
+							break;
+						}
+					} else{
+						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-ptree'\n\n", argv[0]);
+						err_flag = 1;
+						break;
+					}
+			}
+			else if(strcmp(arg_in, "-wtree") == 0){
+					if(i+1 < argc){
+						if(atoi(argv[i+1]) >= 1 && atoi(argv[i+1]) <= 512){
+							WORKER_BUFFER_SIZE = atoi(argv[i+1]);
+							printf("WORKER MERKLE TREE SIZE SET TO %i\n", WORKER_BUFFER_SIZE);
+							i++;
+						} else{
+							printf("%s   fatal:  OPTION '-wtree' EXPECTS AN INTEGER ARGUMENT BETWEEN O AND 512, RECEIVED '%s' INSTEAD\n\n", argv[0], argv[i+1]);
+							err_flag = 1;
+							break;
+						}
+					} else{
+						printf("%s   fatal:  ARGUMENT EXPECTED AFTER '-wtree'\n\n", argv[0]);
 						err_flag = 1;
 						break;
 					}
@@ -1249,7 +1355,13 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
 \t --multi \t\t MULTILEVEL ARCHITECTURE (DEFAULT: DISABLED)\n\
 \t  -w #   \t\t NUMBER OF WORKER CHAINS AS A POSITIVE NON-ZERO INTEGER (DEFAULT: 1)\n\
 \t  -t #   \t\t THE TARGET DIFFICULTY AS A POSITIVE NON-ZERO INTEGER (DEFAULT: 1)\n\
-\t  -diff #   \t\t STARTING DIFFICULTY MODIFIER AS AN INTEGER, HIGHER VALUES ARE MORE DIFFICULT [-3 MINIMUM, 0 NORMAL, 26 MAXIMUM] (DEFAULT: -1)\n", argv[0]);
+\t  -timeout #   \t\t THE PROGRAM TIMEOUT IN SECONDS AS A POSITIVE NON-ZERO INTEGER (DEFAULT: DISABLED)\n\
+\t  -diff #   \t\t STARTING DIFFICULTY MODIFIER AS AN INTEGER, HIGHER VALUES ARE MORE DIFFICULT [-3 MINIMUM, 0 NORMAL, 26 MAXIMUM] (DEFAULT: -1)\n\
+\t  -dscale # \t\t DIFFICULTY SCALING MODIFIER AS AN INTEGER, HIGHER VALUES INCREASE THE DIFFICULTY SCALING RATE, MINIMUM OF ZERO FOR CONSTANT DIFFICULTY (DEFAULT: 1)\n\
+\t  -dbits # \t\t STARTING DIFFICULTY BITS AS AN INTEGER, HIGHER VALUES INCREASE THE STARTING DIFFICULTY [0 MINIMUM, 254 MAXIMUM] (DEFAULT: 0)\n\
+\t  -dlimit # \t\t NUMBER OF BLOCKS PER DIFFICULTY LEVEL, MUST BE AN INTEGER GREATER THAN ZERO (DEFAULT: 32)\n\
+\t  -wTree # \t\t WORKER MERKLE TREE BUFFER SIZE, MINIMUM OF 1 FOR NO MERKLE HASHING, MAXIMUM OF 512 IS THE SYSTEM LIMITATION (DEFAULT: 64)\n\
+\t  -pTree # \t\t PARENT MERKLE TREE BUFFER SIZE, MINIMUM OF 1 FOR NO MERKLE HASHING, MAXIMUM OF 512 IS THE SYSTEM LIMITATION (DEFAULT: 16)\n", argv[0]);
   }
   // RUN THE SELECTED IMPLEMENTATION(S)
   else{
@@ -1444,6 +1556,16 @@ PUSH_DOMAIN(t_handle, "INIT", -2, 2, 2); // START VARIABLES INIT
 		sprintf(stream_name, "TIME UPDATE");
 		NAME_STREAM(tStream, stream_name);
 
+		// Variables for time based stop conditions
+		WORD * start_time;
+		start_time = (WORD *)malloc(sizeof(WORD));
+
+		WORD * elapsed_time;
+		elapsed_time = (WORD *)malloc(sizeof(WORD));
+
+		*start_time = *time_h;
+		*elapsed_time = 0;
+
     int FLAG_TARGET = 0;
     int PROC_REMAINING = num_workers+multilevel;
 
@@ -1534,13 +1656,16 @@ PUSH_DOMAIN(t_handle, "START", -2, 2, 3); // START STREAM INIT
     /********************************************BEGIN MINING UNTIL TARGET BLOCKS ARE FOUND********************************************/
     int block_total = 0;
 
-    while(block_total < TARGET_BLOCKS || PROC_REMAINING != 0){
+		// MINING LOOP UNTIL THE TARGET NUMBER OF BLOCKS ARE MINED OR THE TIME LIMIT IS REACHED
+		while( (block_total < TARGET_BLOCKS && ((TIMEOUT == 1)?((*elapsed_time) < TIME_LIMIT):1)) || PROC_REMAINING != 0){
       updateTime(&tStream, time_h, t_handle);
+			*elapsed_time = (*time_h - *start_time);
       if(MINING_PROGRESS == 1){
         mining_state = printProgress(mining_state, multilevel, num_workers, pchain_blocks, chain_blocks);
       }
       // SET FLAG_TARGET TO 1
-      if(block_total >= TARGET_BLOCKS && FLAG_TARGET == 0){
+			// BEGIN SHUTDOWN PROCESS IF AN END CONDITION IS MET
+			if((block_total >= TARGET_BLOCKS || (TIMEOUT == 1 && ((*elapsed_time) >= TIME_LIMIT))) && FLAG_TARGET == 0){
           FLAG_TARGET = 1;
 
 					// END MINING SECTION, MOVE ON TO FINAL HASH
@@ -1552,8 +1677,12 @@ PUSH_DOMAIN(t_handle, "START", -2, 2, 3); // START STREAM INIT
           cudaEventRecord(g_time[2], g_timeStream);
 					PUSH_DOMAIN(t_handle, "FINAL", -2, 2, 6); // START FINAL LOOP
 
-
-          printLog("\n\n**********************************************\nTARGET REACHED, FINISHING REMAINING PROCESSES*\n**********************************************\n\n");
+					if(TIMEOUT == 1 && ((*elapsed_time) >= TIME_LIMIT)){
+						printLog("\n\n**************************************************\nTIME LIMIT REACHED, FINISHING REMAINING PROCESSES*\n**************************************************\n\n");
+					}
+					else{
+          	printLog("\n\n**********************************************\nTARGET REACHED, FINISHING REMAINING PROCESSES*\n**********************************************\n\n");
+					}
       }
       /*--------------------------------------------------------------------------------------------------------------------------------*/
       /*******************************************LOOP OVER MINERS TO CHECK STREAM COMPLETION********************************************/
@@ -1832,6 +1961,8 @@ PUSH_DOMAIN(t_handle, "START", -2, 2, 3); // START STREAM INIT
     /*******************************************************FREE MINING VARIABLES******************************************************/
     printDebug((const char*)"FREEING MINING MEMORY");
     freeTime(&tStream, &time_h);
+		free(start_time);
+		free(elapsed_time);
     /*--------------------------------------------------------------------------------------------------------------------------------*/
     /*************************************************FREE PARENT AND WORKER VARIABLES*************************************************/
     printDebug((const char*)"FREEING WORKER MEMORY");
@@ -2385,7 +2516,7 @@ __host__ void miningBenchmarkTest(int num_workers){
 	cudaEventRecord(t_load->t_start, t_load->stream);
 
 	// SET TARGET DIFFICULTY
-	t_load->block_h[18] = 0x1d00ffff;
+	t_load->block_h[18] = START_DIFF;
 	getDifficulty(t_load);
 
 	srand(time(0));
@@ -2396,7 +2527,7 @@ __host__ void miningBenchmarkTest(int num_workers){
 	  }
 		t_load->block_h[0] = 0x01000000;
 		t_load->block_h[17] = getTime();
-		t_load->block_h[18] = 0x1d00ffff;
+		t_load->block_h[18] = START_DIFF;
 		t_load->block_h[19] = 0x00000000;
 
 		cudaMemcpyAsync(t_load->block_d, t_load->block_h, BLOCK_SIZE, cudaMemcpyHostToDevice, t_load->stream);
@@ -2521,7 +2652,7 @@ __host__ void miningBenchmarkTest_full(int num_workers){
 	initTime(&tStream, &time_h);
 
 	// SET TARGET DIFFICULTY
-	t_load->block_h[18] = 0x1d00ffff;
+	t_load->block_h[18] = START_DIFF;
 	getDifficulty(t_load);
 
 	printf("STARTING WORKLOAD SIMULATION\n");
@@ -2915,7 +3046,7 @@ __host__ void initializeBlockHeader(WORD * block, WORD version, WORD * prevBlock
 __host__ void initializeWorkerBlock(WORKLOAD * load){
   WORD prevBlock[8], word_time;             // Previous Block and time vars
   WORD version = 0x01000000;      // Default Version
-  WORD diff_bits = 0x1d00ffff; // Starting Difficulty
+	WORD diff_bits = START_DIFF;
 	WORD nonce = 0x00000000;		// Starting Nonce
   for(int i = 0; i < 8; i++){
     prevBlock[i] = 0x00000000;
@@ -2927,7 +3058,7 @@ __host__ void initializeWorkerBlock(WORKLOAD * load){
 __host__ void initializeParentBlock(WORD * pBlock_h){
 	WORD prevBlock[8], hash[8], word_time;             // Previous Block and time vars
   WORD version = 0x01000000;      // Default Version
-  WORD diff_bits = 0x1d00ffff; // Starting Difficulty
+	WORD diff_bits = START_DIFF;
 //	WORD diff_bits = 0x1c00ffff; // Starting Difficulty
 	WORD nonce = 0x00000000;		// Starting Nonce
   for(int i = 0; i < 8; i++){
@@ -2986,13 +3117,15 @@ __host__ void updateParentHash(WORD * block_h, WORD * hash_h){
 }
 
 // UPDATE DIFFICULTY BY DECREASING THE LARGEST TARGET BYTE BY 1
+// NEW UPDATE INCLUDES VARIABLES FOR DIFFICULTY SCALING AND PRESET DIFFICULTY BITS
 __host__ void updateDifficulty(WORD * block_h, int diff_level){
-  int start_pow = 0x1d;
-  int start_diff = 0x00ffff;
+	char debugOut[100];
   int new_pow = 0x00;
   int new_diff = 0x000000;
-  new_pow = start_pow-((diff_level)/0xFF);
-  new_diff = start_diff - (((diff_level)%0xFF)<<8);
+  new_pow = START_POW -(((diff_level*DIFF_SCALING)+DIFFICULTY_BITS)/0xFF);
+  new_diff = 0x00FFFF - ((((diff_level*DIFF_SCALING)+DIFFICULTY_BITS)%0xFF)<<8);
+	sprintf(debugOut, "UPDATE DIFFICULTY: START: 0x%02x%06x  | NEW: 0x%02x%06x \n ", START_POW, START_BITS, new_pow, new_diff);
+	printDebug((const char*)debugOut);
 	block_h[18] = (new_pow << 24) | new_diff;
 }
 
@@ -3072,6 +3205,7 @@ __host__ void getDifficulty(WORKLOAD * load){
 __host__ double calculateDifficulty(BYTE * bits){
   // FIRST BYTE FOR LEADING ZEROS, REST FOR TARGET VALUE
   int start_pow = 0x1d;
+	//int start_pow = START_POW; 		// FOR USE IF USING A CUSTOM TARGET FOR DIFFICULTY LEVEL 1
   int start_diff = 0x00ffff;
   int bit_pow = bits[0];
   int bit_diff = (((unsigned int)bits[1]) << 16) + (((unsigned int)bits[2]) << 8) + ((unsigned int)bits[3]);
@@ -3083,7 +3217,7 @@ __host__ double calculateDifficulty(BYTE * bits){
 __host__ int calculateTarget(BYTE * bits, BYTE * target){
   // FIRST BYTE DETERMINES LEADING ZEROS
   // DIFFICULTY MODIFIED TO REDUCE INITIAL COMPUTATION TIME
-  int padding = (32 - bits[0])+DIFF_REDUCE;
+  int padding = (32 - bits[0]);
   int length = (padding + 3);
   for(int i = 0; i < 32; i++){
     if(i < padding){
@@ -3102,7 +3236,7 @@ __host__ int calculateTarget(BYTE * bits, BYTE * target){
 __host__ int calculateMiningTarget(BYTE * bits, BYTE * target_bytes, WORD * target){
   // FIRST BYTE DETERMINES TRAILING ZEROS
   // DIFFICULTY MODIFIED TO REDUCE INITIAL COMPUTATION TIME
-  int padding = (32 - bits[0])+DIFF_REDUCE;
+  int padding = (32 - bits[0]);
   int length = (padding + 3);
 	BYTE reverse_bits[3];
 	reverse_bits[0] = bits[3];
@@ -3879,6 +4013,7 @@ __host__ int initializeBenchmarkOutfile(char * outFile, char * out_dir_name, int
   sprintf(outFile, "%s/benchmark_%i_threads.txt", out_dir_name, NUM_THREADS);
 
   if(output = fopen(outFile, "w")){
+		sprintf(logOut,"FOUND WORKER %i OUTPUT FILE: %s.",worker_id, outFile);
 		fclose(output);
   }
   else{
