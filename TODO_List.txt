@@ -6,8 +6,18 @@ TODO IN-PROGRESS
 Features that are currently being worked on, in order of priority (excluding cleanup tasks)
 *********************************************************************************
 
---Update output parser
-  | STATUS: Currently built to accommodate verification, still needs to be updated to include performance data
+--Code Refactor
+  | STATUS: IN-PROGRESS
+  | Dependencies:
+    --Add makefile for building
+      | Status: IN-PROGRESS
+    --Split code into filesystem (separate compilation)
+      | Status: QUEUED
+    --Convert to C++
+      | Status: QUEUED
+
+--Add makefile building
+  | STATUS: IN-PROGRESS
 
 --Timing Update Bug
   | STATUS: Patched for now, requires further fixing in the future to enable more accurate timing
@@ -18,13 +28,15 @@ TODO WORK QUEUE
 Features to be developed soon
 *********************************************************************************
 
---Update output parser
-  | STATUS: Load and verification scripts are functional, more features are needed
-  | DETAILS:
-    -The current python parser is set up to load and verify data from the miner output files
-    -Additional features are needed aside from the verificaion component that has been added
-    -Output Parser created for benchmarking with spreadsheet writer and graphing capabilities
-    -Add similar funtionality for the minerPostprocess script, use for throughput to start
+--Split the code into filesystem
+  | PRIORITY: Medium High
+  | STATUS: QUEUED
+  | Dependencies: makefile building
+
+--Convert to C++
+  | PRIORITY: High
+  | STATUS: QUEUED
+  | Dependencies: [makefile building, separate compilation]
 
 --Add device attribute checking
   | STATUS: Calculations of design dimensions in terms of device hardware limitations allows for minimum device requirements to be determined
@@ -231,6 +243,27 @@ Code improvements which are neccessary to have a fully functional program
 TODO Project Management
 *********************************************************************************
 
+--Code Refactor
+  | PRIORITY: High
+  | Status: IN-PROGRESS
+  | Details:
+    -The code currently works as is, but the single file format makes it difficult to manage. This format initially helped with optimization by removing performance penalties that may arise from separate compilation
+    -Use makefile and/or other scripts to compile the project with separate compilation, check performance and add nvcc optimization flags where neccessary to maintain the current level of performance
+    -Update host code from C to C++ where applicable, use OOP style and more abstract data structures to simplify control flow and resource management
+    -Use more robust documentation method during refactor (Javadoc style comments and tags?)
+    -Simplify handling of profiler events to increase readability of the main application
+
+--Convert to C++
+  | PRIORITY: High
+  | Dependencies: [makefile building, separate compilation]
+  | Details:
+    -Initial code was written in C to prevent compatibility issues, try to update host code to C++ if possible, restructure and simplify using an OOP style. (GPU code must stay in C for compatibility)
+    -Use class structure to better manage memory allocation, improve code reusability, and use modular design to simplify connections to other components
+    -Separate host code for miner management from the testing code, preferably into separate classes and files (ex. split code for benchmark, debugging, and the main test loop)
+    -Modify the core mining process control flow using higher level C++ data structures (ex. stacks and queues). Try to optimize for future host side parallelism with OpenMP or OpenACC
+      -CPU side parallel processing needs to be careful of race-conditions and memory contention. Additional risk of critical GPU related deadlocks due to contention over streams or memory copy engine
+      -May experience slow down from context switching between host threads that attempt to query the GPU. Could solve with a master thread for GPU control, and others handle subprocesses
+
 --Add makefile building
   | PRIORITY: High
   | Details:
@@ -282,25 +315,17 @@ TODO Project Management
 TODO PYTHON
 *********************************************************************************
 
---Update output parser
-  | PRIORITY: High
-  | Status: IN-PROGRESS
-  | Details:
-    -The current python parser is set up to load and verify data from the miner output files
-    -Additional features are needed aside from the verificaion component that has been added
-    -Timing and performance analytics need to be gathered for further analysis
-    -A function is needed to organize the required data in spreadsheets, sets up for further data analysis
-    -More input flags would be nice to avoid accidentally overwriting an expensive test, especially for mining
-  UPDATE:
-    -Output Parser created for benchmarking with spreadsheet writer and graphing capabilities
-    -Next step: Add similar funtionality for the minerPostprocess script, use for throughput to start
 
 --Create an analysis script
   | PRIORITY: Medium
+  | Status: Updated 12-5-2019
   | Details:
     -Having the results parsed out into a timing spreadsheet is extremely useful for performance analysis, but the process of graphing/analyzing these results can still be quite time consuming
     -Ideally, either a script or a set of functions can be created to automatically generate statistics and graphs for each design run
     -Some of the goal features may not be possible with the tools that are currently used (such as xlsxwriter) and more research and tools will most likely be needed
+  | Update:
+    -Additional python scripts were added to verify mining results and generate spreadsheets and charts using xlsxwriter, still room for Additions
+    -Better approach may be to use a data science library (numpy, pandas, etc) to perform more detailed analysis on the results
 
 
 *********************************************************************************
@@ -446,6 +471,19 @@ IDEA FUTURE IMPROVEMENTS
 /*--------------------------------------------------------------------------------------------------------------------------------*/
 BACKLOG - Completed items, along with the completion date
 /*--------------------------------------------------------------------------------------------------------------------------------*/
+
+--Update output parser
+  | PRIORITY: High
+  | Status: COMPLETED 12-5-2019
+  | Details:
+    -The current python parser is set up to load and verify data from the miner output files
+    -Additional features are needed aside from the verificaion component that has been added
+    -Timing and performance analytics need to be gathered for further analysis
+    -A function is needed to organize the required data in spreadsheets, sets up for further data analysis
+    -More input flags would be nice to avoid accidentally overwriting an expensive test, especially for mining
+  UPDATE:
+    -Output Parser created for benchmarking with spreadsheet writer and graphing capabilities
+    -Next step: Add similar funtionality for the minerPostprocess script, use for throughput to start
 
 --Create Output Verification
   | PRIORITY: Medium High

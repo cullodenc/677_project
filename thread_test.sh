@@ -1,12 +1,28 @@
+# Device Limitation options
+# NUMBER OF AVAILABLE MULTIPROCESSORS ON THE SYSTEM   Default: 10, system dependent
+num_multiprocessors=10
+
+#CUDA CAPABILITY VERSION FOR CODE GENERATION
+cc=60
+
+# ENABLE PYTHON POSTPROCESSING (Requires xlsxwriter and Python 2.7)
+use_py=0
+
+
 
 # FULL BATCH TEST
 NUM_THREADS=(256 512 1024)
 workers=(1 2 4 8 16)
 
-difficulty=-2
+difficulty=0
 
 
 echo "*************************** STARTING BENCHMARK BATCH TEST***************************"
+
+
+# VARIABLE ASSIGNMENTS
+SM="-DSM=$num_multiprocessors"
+
 
 bin_dir="bin/benchmark/"
 if [[ ! -e $bin_dir ]]; then
@@ -20,7 +36,7 @@ if [ "$1" != "" ]; then
     for j in "${NUM_THREADS[@]}"
     do
       echo -e "\n\nCOMPILING ARCHITECTURE FOR $j THREADS PER BLOCK \n"
-      nvcc -DCUSTOM_THREADS=$j -gencode arch=compute_60,code=sm_60 cuda_miner.cu -o ${bin_dir}cuda_miner$j
+      nvcc $SM -DCUSTOM_THREADS=$j -gencode arch=compute_${cc},code=sm_${cc} cuda_miner.cu -o ${bin_dir}cuda_miner$j
     done
   else
     echo -e "Unknown input: $1 \nUSAGE: ./thread_test.sh (-c)"
@@ -63,5 +79,9 @@ do
   done
 done
 
+if [ "$use_py" == "1" ]; then
 echo "STARTING PYTHON SCRIPT"
 python ./python/read_benchmarks.py ./outputs/benchtest/
+else
+echo "PYTHON SCRIPT DISABLED"
+fi

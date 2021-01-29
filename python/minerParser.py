@@ -9,6 +9,9 @@ import minerBlock
 from minerBlock import WorkerBlock
 from minerBlock import ParentBlock
 
+import diffBlock
+from diffBlock import DiffBlock
+
 
 class MinerParser:
 	def __init__(self, tree_size):
@@ -18,25 +21,38 @@ class MinerParser:
 
 		self.h_flag = 0
 		self.header=""
+		self.elapsed_time = 0.0
 		return;
 
 	def setInFile(self, input_file):
 		self.in_file = input_file
 		return;
 
-	def search(self, out_line, blocks):
+	def search(self, out_line, chain, blocks):
 		self.searchBlock(out_line, blocks)
 		self.searchHash(out_line, blocks)
-		self.searchTime(out_line, blocks)
+		self.searchTime(out_line, chain, blocks)
 
 	def searchHash(self, out_line, blocks):
 		if re.search("HASH:", out_line):
 			blocks[self.count-1].setHash(out_line.split()[1])
 		return;
 
-	def searchTime(self, out_line, blocks):
+	def searchTime(self, out_line, chain, blocks):
 		if re.search("BLOCK_TIME:", out_line):
-			blocks[self.count-1].setTime(out_line.split()[1])
+			self.elapsed_time += float(out_line.split()[1])
+			blocks[self.count-1].setTime(out_line.split()[1], self.elapsed_time)
+			#TODO Add diff block buillding here?
+
+			if(len(chain.diff_block)>0):
+				if(blocks[self.count-1].diff_target == chain.diff_block[-1].target):
+					chain.diff_block[-1].addTime(blocks[self.count-1].time)
+				else:
+					chain.diff_block.append(DiffBlock(blocks[self.count-1].diff_target, blocks[self.count-1].time))
+			else:
+				chain.diff_block.append(DiffBlock(blocks[self.count-1].diff_target, blocks[self.count-1].time))
+
+
 		return;
 
 	def searchBlock(self, out_line, blocks):

@@ -650,7 +650,15 @@ int TEST_COUNT = 0;
 
 // HARDWARE CONTRAINTS
 #define HOST_MULTIPROCESSORS 8					// AVAILABLE CORES ON THE CPU (COULD AFFECT TIMING WITH MANY WORKERS)
-#define DEVICE_MULTIPROCESSORS 10 			// TOTAL NUMBER OF STREAMING MULTIPROCESSORS ON THE GPU
+//#define DEVICE_MULTIPROCESSORS 10 			// TOTAL NUMBER OF STREAMING MULTIPROCESSORS ON THE GPU
+
+// Compile time argument for devices with different number of multiprocessors
+#ifdef SM
+	#define DEVICE_MULTIPROCESSORS SM
+#else
+	#define DEVICE_MULTIPROCESSORS 10
+#endif
+
 //#define DEVICE_MINIMUM_VERSION 3					// MINIMUM COMPUTE COMPATIBILITY REQUIRED
 
 // DEVICE THREAD CONSTRAINTS
@@ -682,6 +690,13 @@ int TEST_COUNT = 0;
 	#define NUM_THREADS 1024
 #endif
 
+// USER DEFINED NUMBER OF THREADS
+#ifdef PARENT_PROC
+	#define PARENT_PROCESSORS PARENT_PROC
+#else
+	#define PARENT_PROCESSORS 2
+#endif
+
 // DEVICE LIMITATIONS
 #define SM_THREAD_LIMIT_REGS REG_PER_SM/MINING_REG_PER_THREAD   // 2048
 #define MINING_BLOCKS_PER_SM SM_THREAD_LIMIT_REGS/NUM_THREADS		// 2 @1024 THREADS
@@ -695,7 +710,7 @@ int TEST_COUNT = 0;
 
 // Workers get 80% of resources when using multilevel mining, varies depending on the number of multiprocessors available on the device
 // 16 @1024 threads, 32 @512 threads, 64 @256, 128 @128, 256 @64
-#define MAX_BLOCKS MINING_BLOCKS_PER_SM*(DEVICE_MULTIPROCESSORS-2)
+#define MAX_BLOCKS MINING_BLOCKS_PER_SM*(DEVICE_MULTIPROCESSORS-PARENT_PROCESSORS)
 
 // USER DEFINED PARAMETER DEFAULTS
 #define MERKLE_THREADS 512			// 512 MAXIMUM DUE TO SHARED MEMORY LIMIT (WAS 64 FOR TESTING)
@@ -767,6 +782,7 @@ __host__ void hostCoreProcess(int num_chains, int multilevel);
 /*****************************************************************************TESTING FUNCTIONS*****************************************************************************/
 /***************************************************************************************************************************************************************************/
 /*-----------------------------------------------------------------------------QUERY FUNCTIONS-----------------------------------------------------------------------------*/
+__host__ int checkDeviceCompatibility(void);
 __host__ void hostDeviceQuery(void);
 
 /*-----------------------------------------------------------------------------TEST FUNCTIONS------------------------------------------------------------------------------*/
@@ -1369,28 +1385,31 @@ FOR A LIST OF ALL AVAILABLE OPTIONS, TRY '%s --help'\n\n\n", argv[0]);
     if(query_flag == 1){
       hostDeviceQuery();
     }
-    // RUN FUNCTIONAL TEST FOR THE HASHING FUNCTIONS
-    if(test_flag == 1){
-      printf("FUNCTIONAL TESTING SELECTED!!!!!\n\n");
-      hostFunctionalTest();
-			//colorTest(NUM_COLORS, NUM_PALETTES);
-    }
-    // RUN BENCHMARK TEST FOR DEVICE PERFORMANCE
-    if(bench_flag == 1){
-      printf("BENCHMARK TESTING SELECTED!!!!!\n");
-/* CHANGED FOR ALTERNATE BENCHMARK TESTING
-			miningBenchmarkTest(NUM_WORKERS);
-//*/
-			miningBenchmarkTest_full(NUM_WORKERS);
-    }
-    // START MINING IF DRY RUN IS NOT SELECTED
-    if(dry_run == 0){
-      // TODO CHECK FOR PROFILER ENABLED, INCLUDE LOGGING OF ENABLED SETTINGS
-      hostCoreProcess(NUM_WORKERS, MULTILEVEL);
-			  //
-    } else{
-      printLog("MINING DISABLED FOR DRY RUN TESTING. NOW EXITING...\n\n");
-    }
+		int compat_errs = checkDeviceCompatibility();
+		if(compat_errs == 0){
+	    // RUN FUNCTIONAL TEST FOR THE HASHING FUNCTIONS
+	    if(test_flag == 1){
+	      printf("FUNCTIONAL TESTING SELECTED!!!!!\n\n");
+	      hostFunctionalTest();
+				//colorTest(NUM_COLORS, NUM_PALETTES);
+	    }
+	    // RUN BENCHMARK TEST FOR DEVICE PERFORMANCE
+	    if(bench_flag == 1){
+	      printf("BENCHMARK TESTING SELECTED!!!!!\n");
+	/* CHANGED FOR ALTERNATE BENCHMARK TESTING
+				miningBenchmarkTest(NUM_WORKERS);
+	//*/
+				miningBenchmarkTest_full(NUM_WORKERS);
+	    }
+	    // START MINING IF DRY RUN IS NOT SELECTED
+	    if(dry_run == 0){
+	      // TODO CHECK FOR PROFILER ENABLED, INCLUDE LOGGING OF ENABLED SETTINGS
+	      hostCoreProcess(NUM_WORKERS, MULTILEVEL);
+				  //
+	    } else{
+	      printLog("MINING DISABLED FOR DRY RUN TESTING. NOW EXITING...\n\n");
+	    }
+		}
   }
 	cudaDeviceReset();
 
@@ -2079,6 +2098,44 @@ TOTAL_EXECUTION_TIME: %f\n\
 
 /*-------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /******************************************************************************QUERY FUNCTIONS******************************************************************************/
+__host__ int checkDeviceCompatibility(void){
+	printf("CHECKING DEVICE COMPATIBILIY\n\n");
+	int device;
+	int value;
+	int errors = 0;
+	cudaGetDevice(&device);
+	cudaDeviceProp prop;
+	cudaGetDeviceProperties(&prop, device);
+	if(prop.multiProcessorCount < DEVICE_MULTIPROCESSORS){
+		errors++;
+		printf("CRITICAL ERROR: %s DOES NOT HAVE ENOUGH MULTIPROCESSORS FOR EXECUTION.\n  RE-COMPILE USING ARGUMENT '-DSM=%i' AND TRY AGAIN \n", prop.name, prop.multiProcessorCount);
+	}
+
+	if(prop.concurrentKernels != 1){
+		errors++;
+		printf("CRITICAL ERROR: %s DOES NOT SUPPORT CONCURRENT KERNEL EXECUTION, WHICH IS REQUIRED FOR THIS APPLICATION\n", prop.name);
+	}
+
+	cudaDeviceGetAttribute(&value, (cudaDeviceAttr)15 ,device);
+	if(value != 1){
+		printf("WARNING: %s DOES NOT SUPPORT MEMORY COPIES AND KERNEL EXECUTION CONCURRENTLY, WHICH COULD RESULT IN UNEXPECTED BEHAVIOR\n", prop.name);
+	}
+
+	if(prop.major < 6){
+		printf("NOTICE: %s USES COMPUTE CAPABILITY %i, WHICH MAY RESULT IN SUBOPTIMAL PERFORMANCE\n", prop.name, prop.major);
+	}
+
+
+	if(errors > 0){
+		printf("NOTICE: EXECUTION WILL BE PREVENTED DUE TO 1 OR MORE ERRORS \n\n");
+	}else{
+		printf("COMPATIBILIY CHECK PASSED, CONTINUING APPLICATION EXECUTION. \n");
+	}
+
+	return errors;
+}
+
+
 // USE DEVICE PROPERTIES AND ATTRIBUTES TO DISPLAY HARDWARE INFORMATION
 __host__ void hostDeviceQuery(void){
   printf("STARTING DEVICE QUERY\n\n");
@@ -2612,7 +2669,7 @@ __host__ void miningBenchmarkTest_full(int num_workers){
 	for(int i = 0; i < (num_workers-1); i++){
 		// ALLOCATE WORKLOAD INNER VARIABLES
 		allocWorkload(i+1, &c_workload[i], WORKER_BUFFER_SIZE);
-		POP_DOMAIN(w_handle[i]); // END WORKER ALLOCATION RANGE
+		//POP_DOMAIN(w_handle[i]); // ALLOCATION PROFILING DOMAIN IS UNUSED HERE
 	}
 
 	char logResult[1000];
@@ -2798,7 +2855,7 @@ __host__ void miningBenchmarkTest_full(int num_workers){
 		printf("WORKER %i OUTPUT FILE: %s NOT FOUND", num_workers, t_load->outFile);
 	}
 
-	printf("FINISHED PRINTING TO OUTPUT FILE ")
+	printf("FINISHED PRINTING TO OUTPUT FILE ");
 
 	DOMAIN_DESTROY(handle);
 

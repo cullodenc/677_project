@@ -12,7 +12,9 @@ class MinerBlock:
         self.count = count						# BLOCK NUMBER
         self.header = header					# BLOCK HEADER
         self.root = header[72:136]				# BLOCK ROOT (ALGORITHM MERKLE)
-        self.time = 0							# BLOCK COMPUTE TIME
+        self.diff_target = header[144:152]
+        self.time = 0.0 						# BLOCK COMPUTE TIME
+        self.elapsed_time = 0.0
         self.hash = ""							# VAR FOR VERIFICATION HASH
         self.merkle = ""						# VAR FOR VERIFICATION MERKLE
         self.label = ""
@@ -25,8 +27,9 @@ class MinerBlock:
     def getHash(self):
         return self.hash;
 
-    def setTime(self, time):					# SET BLOCK COMPUTE TIME
+    def setTime(self, time, elapsed_time):					# SET BLOCK COMPUTE TIME
         self.time = time
+        self.elapsed_time = float(elapsed_time)
         return;
 
     def getTime(self):					        # GET BLOCK COMPUTE TIME
@@ -70,6 +73,7 @@ class WorkerBlock(MinerBlock):
     def __init__(self, count, header, worker_number):
         MinerBlock.__init__(self, count, header)    # INHERIT FROM MinerBlock
         self.label = "[WORKER "+str(worker_number)+"]"
+        self.worker_number = worker_number
         return;
 
     def setMerkle(self, tree_size, input_file):			# CALCULATE MERKLE FROM INPUT FILE
@@ -84,6 +88,7 @@ class ParentBlock(MinerBlock):
         self.tree = []                              # WORKER BLOCKS IN THE MERKLE TREE
         self.tree_size = 0                          # SIZE OF THE MERKLE TREE
         self.label = "[PARENT]"
+        self.worker_number = 0
         return;
 
     def appendTree(self, block):

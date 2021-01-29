@@ -10,6 +10,9 @@ from minerBlock import WorkerBlock
 from minerParser import WorkerParser
 from minerParser import ParentParser
 
+import diffBlock
+from diffBlock import DiffBlock
+
 class MinerThread:
     def __init__(self, total_workers, multilevel, tree_size):
         self.total_workers = total_workers
@@ -18,6 +21,8 @@ class MinerThread:
         self.time = 0
         self.blockchain = []
         self.label = ""
+
+        self.diff_block = []
 
         if multilevel == 1:
             self.out_dir="outputs/results_"+str(total_workers)+"_pchains/"
@@ -36,7 +41,7 @@ class MinerThread:
         outlines = out_file.readlines()
 
     	for ol in outlines: # Parse output file to get computed block headers
-    	   parser.search(ol, self.blockchain)
+    	   parser.search(ol, self,  self.blockchain)
 
         self.handleMerkle(parser)
 
